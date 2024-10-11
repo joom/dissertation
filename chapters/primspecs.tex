@@ -1,0 +1,528 @@
+\chapter{Foreign Function Specifications}
+\label{primspecs}
+
+\epigraph{If he was forced to look at the light itself, wouldn’t it hurt his eyes? \\Wouldn’t he turn away, and run back to the things he could see?}{Plato, on the cave allegory~\cite{Plato2000}}
+
+When proving correctness of a Coq program that calls functions implemented in C and proved correct in VST, the VST \emph{function specification} (funspec) must be coherent with an appropriate Coq \gls{functional model}.
+In this chapter we show how to generate a coherent VST funspec from a reified function description.  Coherence on the Coq side is assured by reflection.  Coherence on the C side is assured by a Coq proof using VST's program logic.  Coherence of the funspec generation could be proved, in principle, from VST's semantic model and soundness proof, but that is beyond the scope of this thesis.
+
+\section{Foreign Function Descriptions}
+\label{primdesc}
+
+Similarly to how we use \reified{} descriptions to write down (and eventually generate) descriptions of constructors, we also want to use them to describe \gls{foreign function}s.
+
+Our foreign function interface allows not only \gls{foreign function}s that use Coq \gls{inductive type}s, but also user-defined \gls{foreign type}s, and \gls{foreign function}s that use these \gls{foreign type}s. In fact, a lot of the interesting cases where we might want to use the 
+\ffi{} will involve some \gls{foreign type}s and some functions that construct, modify, or observe values of these \gls{foreign type}s, and some Coq \gls{inductive type}s. 
+
+% A mechanism in Coq that allows us to express this 
+
+The \reified{} descriptions we introduced in \autoref{reified} suit this purpose as well. Since \reified{} descriptions allow us to annotate every component of a function type, we can define an annotation type that contains additional information about the \gls{foreign type}s we may need to use. Then, the only remaining question is, what additional information is necessary for our purposes? To understand this question better, we need to familiarize ourselves with the workflow of writing \gls{foreign type}s and \gls{foreign function}s.
+
+A user of our system will define their \gls{foreign type}s and \gls{foreign function}s as axioms in Coq, preferably in a separate module. Here we define a type for 63-bit unsigned integers and some function that use this type, which we will explain in more detail in \autoref{integers}:
+
+\begin{Verbatim}
+\kw{Module} \ty{C}.
+  \kw{Axiom} \ty{uint63} : \ty{Type}.
+  \kw{Axiom} \fn{from_nat} : \ty{nat} -> \ty{uint63}.
+  \kw{Axiom} \fn{to_nat} : \ty{uint63} -> \ty{nat}.
+  \kw{Axiom} \fn{add} : \ty{uint63} -> \ty{uint63} -> \ty{uint63}.
+\kw{End} \ty{C}.
+\end{Verbatim}
+
+These axioms are the \gls{foreign type}s and \gls{foreign function}s that our client programs will use.
+In order to reason about these types and functions we defined here, we want to describe the relationship between these axioms and their \gls{functional model}s.
+Here we define a model type and some model functions for the axioms above:
+
+\begin{Verbatim}
+\kw{Module} \ty{FM}.
+  \kw{Definition} \ty{uint63} : \ty{Type} := \{\bn{n} : \ty{nat} | \bn{n} \ty{<} (\dt{2} \fn{^} \dt{63})\}.
+  \kw{Definition} \fn{from_nat} (\bn{n} : \ty{nat}) : \ty{uint63} := 
+    (\bn{n} \fn{mod} (\dt{2} \fn{^} \dt{63}) ; ...).
+  \kw{Definition} \fn{to_nat} (\bn{x} : \ty{uint63}) : \ty{nat} :=
+    \kw{let} '(\bn{n}; _) := \bn{x} \kw{in} \bn{n}.
+\end{Verbatim}
+\newpage
+\begin{Verbatim}
+  \kw{Definition} \fn{add} (\bn{x} \bn{y} : \ty{uint63}) : \ty{uint63} :=
+    \kw{let} '(\bn{n}; _) := \bn{x} \kw{in}
+    \kw{let} '(\bn{m}; _) := \bn{y} \kw{in}
+    ((\bn{n} \fn{+} \bn{m}) \fn{mod} (\dt{2} \fn{^} \dt{63}) ; ...).
+\kw{End} \ty{FM}.
+\end{Verbatim}
+
+Notice that these are also defined in a separate module, and the names of the \gls{functional model} definitions match the \gls{foreign type} and \gls{foreign function} names.
+The \ty{C} module will contain Coq axioms for the \gls{foreign type}s, and Coq axioms for \gls{foreign function}s that may use these \gls{foreign type}s. These functions will be realized later by C functions through the \FFI{}, as we have seen in \autoref{usage}.
+The \ty{FM} module, on the other hand, will contain the \gls{functional model} definitions. These definitions are written solely in Coq, and we can prove properties about these definitions using the usual reasoning methods of Coq.
+
+When we write a \reified{} description of the \gls{foreign function} \fn{C.from\_nat}, we want to denote that the types of \ty{C.uint63} and \ty{FM.uint63} are related to each other. The type of \ty{C.uint63} will contain components that are \gls{foreign type}s, the type of \ty{FM.uint63} will have the same type but the \gls{foreign type} components will be replaced with the \gls{functional model} counterparts.
+
+A \reified{} description annotates every component of a type with an annotation type \texttt{\bn{ann} : \ty{Type} -> \ty{Type}}. The annotation type is \glslink{parameter}{parametrized} or \glslink{index}{indexed} by a single type, as opposed to two types at the same time. This still works for our purposes, but we have to consider one of the types the primary one. We consider the \gls{functional model} type to be the primary type and the \gls{foreign function} type to be the secondary type in our definitions, but there is no fundamental reason for this choice, only convenience.
+
+We need two more definitions before we define the annotation type for foreign functions. The first definition is a new type class, that allows us to express which model type component and which foreign type component are related:
+\newpage
+\newcommand{\ForeignInGraph}{\hyperref[code:ForeignInGraph]{\ty{ForeignInGraph}}}
+\begin{Verbatim}
+\kw{Class} \ForeignInGraph{}\label{code:ForeignInGraph} (\bn{model} \bn{foreign} : \ty{Type}) : \ty{Type} :=
+  \fn{model_in_graph} : \InGraph{} \bn{model}.
+\end{Verbatim}
+
+This type class is helpful because we need to define an \InGraph{} record for the \gls{functional model} type, which is represented as a plain Coq type, as opposed to the \gls{foreign type}, which is represented as a Coq axiom. This is because the \InGraph{} record needs to be able to inspect values of this type, and values of an axiomatized type will be uninspectable.
+
+Defining \InGraph{} record as an instance, however, creates a different problem: In the case that the type used as a \gls{functional model} will be used in computation later for a different type, we would have multiple \InGraph{} instances for the same type, which breaks type class inference. For example, in \autoref{bytestrings}, we use the \ty{string} type in Coq as the \gls{functional model} type for bytestrings. Bytestrings and naive Coq strings will have different memory representations, even though they will both have \InGraph{} instances indexed by the same type (up to normalization). In order to get around this problem, we should avoid defining an \InGraph{} instance for the foreign case, and use a \ForeignInGraph{} instance for such cases. Since the axiomatized \gls{foreign type} is not reused, this will rectify the type class inference for our system.
+
+There is one missing piece in the larger puzzle of foreign function annotations: an isomorphism abstraction that allows us to express that the model type and the foreign type are isomorphic to each other. We can use the common definition:
+
+\newcommand{\Isomorphism}{\hyperref[code:Isomorphism]{\ty{Isomorphism}}}
+\newcommand{\fromiso}{\hyperref[code:fromiso]{\fn{from}}}
+\newcommand{\toiso}{\hyperref[code:toiso]{\fn{to}}}
+\begin{Verbatim}
+\kw{Class} \Isomorphism{}\label{code:Isomorphism} (\bn{A} \bn{B} : \ty{Type}) : \ty{Type} :=
+  \{ \fromiso{}\label{code:fromiso} : \bn{A} -> \bn{B}
+  ; \toiso{}\label{code:toiso} : \bn{B} -> \bn{A}
+  ; \fn{from_to} : \kw{forall} (\bn{x} : \bn{A}), \toiso{} (\fromiso \bn{x}) = \bn{x}
+  ; \fn{to_from} : \kw{forall} (\bn{x} : \bn{B}), \fromiso{} (\toiso{} \bn{x}) = \bn{x}
+  \}.
+\end{Verbatim}
+
+\newpage
+Now we have all the pieces to define the annotation type:
+
+\newcommand{\foreignann}{\hyperref[code:foreignann]{\ty{foreign\_\linebreak[0]ann}}}
+\newcommand{\foreigningraph}{\hyperref[code:foreigningraph]{\fn{foreign\_\linebreak[0]in\_\linebreak[0]graph}}}
+\newcommand{\secondary}{\hyperref[code:secondary]{\fn{secondary}}}
+\newcommand{\foreigniso}{\hyperref[code:foreigniso]{\fn{foreign\_\linebreak[0]iso}}}
+\begin{Verbatim}
+\kw{Class} \foreignann{}\label{code:foreignann} (\bn{primary} : \ty{Type}) : \ty{Type} :=
+  \{ \secondary{}\label{code:secondary} : \ty{Type}
+  ; \foreigningraph{}\label{code:foreigningraph} : \ForeignInGraph{} \bn{primary} \secondary{}
+  ; \foreigniso{}\label{code:foreigniso} : \Isomorphism{} \bn{primary} \secondary{}
+  \}.
+\end{Verbatim}
+
+
+\newcommand{\transparent}{\hyperref[code:transparent]{\fn{transparent}}}
+\newcommand{\opaque}{\hyperref[code:opaque]{\fn{opaque}}}
+
+
+We intend this annotation type to be used in two different ways:
+
+\begin{enumerate}
+\item The first and easy way is for non\gls{foreign type}s. If we want to use a type that is defined in plain Coq, the primary and secondary type are the same, which means the isomorphism between them is trivial. We define a function \transparent{} to make it easier to generate this annotation:
+
+\begin{Verbatim}
+\kw{Definition} \transparent{}\label{code:transparent} \{\bn{A} : \ty{Type}\} `\{\bn{IG_A} : \InGraph{} \bn{A}\} : \foreignann{} \bn{A} :=
+  \{| \secondary{} := \bn{A}
+   ; \foreigningraph{} := \bn{IG_A}
+   ; \foreigniso{} := \fn{Isomorphism_refl}
+   |\}.
+\end{Verbatim}
+
+\item The second way is for \gls{foreign type}s. In this case, the \bn{primary} type is the \gls{functional model} type, and the \fn{secondary} type will be the \gls{foreign type}. We will have an \InGraph{} record for the \gls{functional model} type.
+This goes against usual type class usage, where there is only one instance expected for a given type. The \InGraph{} record has to be \glslink{parameter}{parametrized} by the \gls{functional model} instead of the \gls{foreign type} because the \graphpredicate{} function taking the \gls{functional model} type as an input allows us to specify how different foreign values are represented in memory. (We will see examples of this in \autoref{examples}.) We define a function \opaque{} to make it easier to generate this kind of annotation:
+
+\begin{Verbatim}
+\kw{Definition} \opaque{}\label{code:opaque} \{\bn{A} \bn{B} : \ty{Type}\} `\{\bn{IG_A} : \ForeignInGraph{} \bn{A} \bn{B}\}
+                 `\{\bn{Iso} : \ty{Isomorphism} \bn{A} \bn{B}\} : \foreignann{} \bn{A} :=
+  \{| \secondary{} := \bn{B}
+   ; \foreigningraph{} := \bn{IG_A}
+   ; \foreigniso{} := \bn{Iso}
+   |\}.
+\end{Verbatim}
+\end{enumerate}
+
+% In the case of a \gls{foreign type}, the primary type is the foreign one, and the secondary one is the \gls{functional model} type. The isomorphism between them provides two functions \fromiso{}\label{code:fromiso} and \toiso{}\label{code:toiso}, and proofs that a round trip in either direction takes us to the same value. For \gls{foreign type}s, we declare axioms that such isomorphisms exists. We call this kind of annotation an \emph{opaque} annotation, because the \gls{foreign type} is defined as an axiom and therefore its definition cannot be inspected in Coq.
+
+% Even in functions that use \gls{foreign type}s, not all arguments use \gls{foreign type}s; \fn{from\_nat}'s first argument, for example, is \ty{nat}. For the annotation for such types, the primary and secondary types are the same, hence they are trivially isomorphic. We call this kind of annotation a \emph{transparent} annotation, since these definitions are purely functional Coq definitions.
+
+
+% We define two helper functions to create opaque and transparent \foreignann{} annotations:
+
+
+
+
+
+\newcommand{\foreignannany}{\hyperref[code:foreignannany]{\fn{foreign\_\linebreak[0]ann\_\linebreak[0]any}}}
+
+\paragraph*{Bogus Annotations}
+At the end of \autoref{reified}, we discussed how the nested higher-order abstract syntax style of our descriptions can require bogus annotations when the annotations cannot be obtained somewhere else. Here, we define a bogus \foreignann{} annotation \foreignannany{}, where the memory representation predicate requires proving \ty{False}, hence is impossible to prove:
+
+\begin{Verbatim}
+\kw{Definition} \fn{GraphPredicate_any} \{\bn{A} : \ty{Type}\} : \GraphPredicate{} \bn{A} :=
+  \{| \graphpredicate{} \bn{g} \bn{outliers} \bn{x} \bn{p} := \ty{False} |\}.
+
+\kw{Definition} \fn{InGraph_any} \{\bn{A} : \ty{Type}\} : \InGraph{} \bn{A}. 
+\kw{Proof}. ... \kw{Defined}.
+
+\kw{Definition} \foreignannany{}\label{code:foreignannany} \{\bn{A} : \ty{Type}\} : \foreignann{} \bn{A} :=
+  @\fn{transparent} \bn{A} \fn{InGraph_any}.
+\end{Verbatim}
+This annotation is not defined as an instance since we do not want Coq's type class resolution system to select it by default, but it is a useful annotation when we want to traverse \reified{} data structures easily, and we will utilize it in the next section.
+
+\section{Consuming Foreign Function Descriptions}
+
+Since the annotation type \foreignann{} contains both the type of the \gls{functional model}, which is the primary type, and the type of the \gls{foreign function}, which is the secondary type, we can traverse the \reified{} annotation and reproduce the function types of the \gls{foreign function} and its \gls{functional model}. Suppose we have a reified description for \fn{from\_nat} from earlier in this chapter:
+
+\begin{Verbatim}
+\kw{Definition} \fn{from\_nat\_reified} : \reified{} \foreignann{} :=
+  @\ARG _ \ty{nat} (@\transparent _ \fn{InGraph\_nat}) (\kw{fun} _ =>
+   (@\RES _ \ty{FM.uint63} (@\opaque \ty{FM.uint63} \ty{C.uint63} \fn{ForeignInGraph\_uint63} \fn{Iso_uint63}))).
+\end{Verbatim}
+
+Notice that this description prioritizes the \gls{functional model} type, as the components of it are passed to \ARG{} and \RES{}, while the components of the \gls{foreign function} type are passed only to the annotation.
+
+\newcommand{\toforeignfntype}{\hyperref[code:toforeignfntype]{\fn{to\_\linebreak[0]foreign\_\linebreak[0]fn\_\linebreak[0]type}}}
+\newcommand{\tomodelfntype}{\hyperref[code:tomodelfntype]{\fn{to\_\linebreak[0]model\_\linebreak[0]fn\_\linebreak[0]type}}}
+
+Now, we want to have two functions, \tomodelfntype{} and \toforeignfntype{}, that use the \reified{} description with annotated by \foreignann{}, to compute the type of the \gls{functional model} function and the \gls{foreign function}, like this:
+
+\vspace{.2in}
+\begin{SaveVerbatim}{E}
+\kw{Compute} (\tomodelfntype{} \fn{from\_nat\_reified}).
+\end{SaveVerbatim}
+\tocoq{\UseVerbatim{E}}
+
+\begin{SaveVerbatim}{E}
+\ty{nat} -> \ty{FM.uint63} : \ty{Type}
+\end{SaveVerbatim}
+\fromcoq{\UseVerbatim{E}}
+
+\vspace{.1in}
+\begin{SaveVerbatim}{E}
+\kw{Compute} (\toforeignfntype{} \fn{from\_nat\_reified}).
+\end{SaveVerbatim}
+\tocoq{\UseVerbatim{E}}
+
+\begin{SaveVerbatim}{E}
+\ty{nat} -> \ty{C.uint63} : \ty{Type}
+\end{SaveVerbatim}
+\fromcoq{\UseVerbatim{E}}
+
+Notice how the former computes a type that matches \fn{FM.from\_nat}'s, and the latter computes a type that matches \fn{C.from\_nat}'s. 
+
+These functions can be defined as traversals of \reified{} descriptions, even though they need bogus annotations to go all the way down the description. The \tomodelfntype{} function that computes the \gls{functional model} type is easier, since the \reified{} description primarily describes the \gls{functional model} type:
+
+\begin{Verbatim}
+\kw{Fixpoint} \tomodelfntype{}\label{code:tomodelfntype} (\bn{r} : \reified{} \foreignann{}) : \ty{Type} :=
+  \kw{match} \bn{r} \kw{with}
+  | \TYPEPARAM{} \bn{k} =>
+      \kw{forall} (\bn{A} : \ty{Type}), \tomodelfntype{} (\bn{k} \bn{A} \foreignannany{})
+  | \ARG{} \bn{primary} \bn{ann} \bn{k} => 
+      \kw{forall} (\bn{p} : \bn{primary}), \tomodelfntype{} (\bn{k} \bn{p})
+  | \RES{} \bn{primary} \bn{ann} => \bn{primary}
+  \kw{end}.
+\end{Verbatim}
+
+The \toforeignfntype{} function that computes the \gls{foreign function} type is a bit trickier:
+
+\begin{Verbatim}
+\kw{Fixpoint} \toforeignfntype{}\label{code:toforeignfntype} (\bn{r} : \reified{} \foreignann{}) : \ty{Type} :=
+  \kw{match} \bn{r} \kw{with}
+  | \TYPEPARAM{} \bn{k} =>
+      \kw{forall} (\bn{A} : \ty{Type}), \toforeignfntype{} (\bn{k} \bn{A} \foreignannany{})
+  | \ARG{} \bn{primary} \bn{ann} \bn{k} =>
+      \kw{forall} (\bn{m} : \secondary{}),
+        \toforeignfntype{} (k (@\fn{to} \bn{primary} \secondary{} \foreigniso{} \bn{m}))
+  | \RES{} _ \bn{ann} => \secondary{}
+  \kw{end}.
+\end{Verbatim}
+
+In the \ARG{} case, the \bn{primary} argument is the \gls{functional model} component type, and \bn{k} expects a value of type \bn{primary}. When we compute the \gls{foreign function} type, however, we quantify over the \fn{secondary} type. Therefore, we have to call \toiso{} in the isomorphism between the primary and secondary types. Through this call, we obtain a value of the type \bn{primary}, and are able to continue with recursion.
+
+Now that we can compute the type of the \gls{foreign function} from the \reified{} description, we can put the description and the actual functions in the same dependently-typed record:
+
+\newpage
+\newcommand{\fndesc}{\hyperref[code:fndesc]{\ty{fn\_\linebreak[0]desc}}}
+\newcommand{\fntypereified}{\hyperref[code:fntypereified]{\fn{fn\_\linebreak[0]type\_\linebreak[0]reified}}}
+\newcommand{\foreignfn}{\hyperref[code:foreignfn]{\fn{foreign\_\linebreak[0]fn}}}
+\newcommand{\modelfn}{\hyperref[code:modelfn]{\fn{model\_\linebreak[0]fn}}}
+\newcommand{\fnarity}{\hyperref[code:fnarity]{\fn{fn\_\linebreak[0]arity}}}
+\newcommand{\cname}{\hyperref[code:cname]{\fn{c\_\linebreak[0]name}}}
+\begin{Verbatim}
+\kw{Record} \fndesc{}\label{code:fndesc} :=
+  \{ \fntypereified{}\label{code:fntypereified} : \reified{} \foreignann{}
+  ; \foreignfn{}\label{code:foreignfn} : \toforeignfntype{} \fntypereified{}
+  ; \modelfn{}\label{code:modelfn} : \reflect{} \fntypereified{}
+  ; \fnarity{}\label{code:fnarity} : \ty{nat}
+  ; \cname{}\label{code:cname} : \ty{string}
+  \}.
+\end{Verbatim}
+
+The function description record contains:
+\begin{itemize}
+\item the \reified{} description of the function, namely \fntypereified{},
+\item the actual \gls{foreign function}, namely \foreignfn{},
+\item the actual (but uncurried) \gls{foreign function}, namely \modelfn{},
+\item the arity of the function, namely \fnarity{},
+\item and the name of the foreign function in C, namely \cname{}.
+\end{itemize}
+
+\paragraph*{Currying the Uncurried} Given that we defined \tomodelfntype{} and \toforeignfntype{} before, we should explain why we did not use \tomodelfntype{} here, which would have allowed us to pass the actual \gls{foreign function} into this record. Instead, we used the \reflect{} function to obtain the uncurried version of the \gls{functional model} type described in \fntypereified{}. This was a design decision to make the VST specification generation easier\footnote{\kw{WITH} clause of VST funspecs is more pleasant to work with when the parameters in the clause are not dependent on each other. Uncurrying packs all the arguments into one nested tuple (thanks to \args{}), which no other parameter in the \kw{WITH} clause depends on.}. Also, we can still compute the curried function from the \reified{} description and a function that has the \reflect{}ed type of that description:
+
+\begin{Verbatim}
+\kw{Equations} \fn{curry_model_fn}
+          (\bn{r} : \reified{} \foreignann{}) (\bn{mt} : \reflect{} \bn{r}) : \tomodelfntype{} \bn{r} :=
+\fn{curry_model_fn} (\TYPEPARAM{} \bn{k}) \bn{mt} :=
+  \kw{fun} (\bn{A} : \ty{Type}) => \fn{curry_model_fn} (\bn{k} \bn{A} \foreignannany{})
+                                   (\kw{fun} \bn{xs} => \bn{mt} (\bn{A}; (\foreignannany{}; \bn{xs}))) ;
+\fn{curry_model_fn} (\ARG{} \bn{A} \bn{H} \bn{k}) \bn{mt} :=
+  \kw{fun} (\bn{a} : \bn{A}) => \fn{curry_model_fn} (\bn{k} \bn{a}) (\kw{fun} \bn{xs} => \bn{mt} (\bn{a}; \bn{xs})) ;
+\fn{curry_model_fn} (\RES{} \bn{A} \bn{H}) \bn{mt} := \bn{mt} \dt{tt}.
+\end{Verbatim}
+
+Understanding this function is not important for this chapter, but it is interesting from a \gls{metaprogramming} perspective, so we should explain the intuition behind this function: The function traverses the \reified{} description to construct a new \gls{functional model} function, effectively re-currying the uncurried \reflect{}ed function \bn{mt}. It recreates the curried version by creating a Coq lambda term for type parameters and arguments, in which the recursive call carries the remaining \reflect{}ed value. At every step, we apply the arguments we have seen so far to the \reflect{}ed value. However, since we need to recreate the nested tuple of all arguments, we add the seen arguments to the \args{} object \bn{xs}, which allows us to create the required nested tuple within the lambda.
+
+Now with this function, it is almost as if we had a field with the \gls{functional model} type of the \gls{foreign function}, because we can obtain it with a mere function call in plain Coq:
+
+\newcommand{\curriedmodelfn}{\hyperref[code:curriedmodelfn]{\fn{curried\_\linebreak[0]model\_\linebreak[0]fn}}}
+\begin{Verbatim}
+\kw{Definition} \curriedmodelfn{}\label{code:curriedmodelfn} (\bn{d} : \fndesc{}) : \tomodelfntype{} (\fntypereified{} \bn{d}) :=
+  \fn{curry_model_fn} (\fntypereified{} \bn{d}) (\modelfn{} \bn{d}).
+\end{Verbatim}
+
+This example once again demonstrates the usefulness of our \reified{} description mechanism, since it isolates the \gls{metaprogramming} to the creation of the description.
+
+\section{Generation of Foreign Function Descriptions}
+\label{genprims}
+
+The mechanisms we outlined regarding the generation of constructor descriptions (in \autoref{genctors}) apply to the generation of foreign function descriptions. This time we do not have to traverse the inductive type descriptions we obtain from MetaCoq, we only have to traverse the \gls{functional model} and \gls{foreign function} types. There are no new techniques involved in this generation; we merely traverse two types at the same time, as opposed to the one type we traversed for constructor descriptions in \autoref{genctors}.
+
+
+\section{Generation of Specifications for Foreign Functions}
+\label{genspecprim}
+
+Generating VST specifications for foreign functions is very similar to how we generated VST specifications for \constructor{} glue functions in \autoref{genspecctor}. There we generated specifications using \reified{} descriptions with \ctorann{} annotations; now we will use \reified{} descriptions with \foreignann{} annotations.
+
+To understand what we are generating, it might be helpful to see an example \gls{foreign function} and how we would write its VST specification by hand. Our running example, \fn{from\_nat}, is a good candidate. Its specialized VST specification would look like this:
+
+\begin{Verbatim}
+\kw{Definition} \fn{from_nat_spec} : \ty{ident} \ty{*} \ty{funspec} :=
+  \kw{DECLARE} \fn{_from_nat}
+  \kw{WITH} \bn{gv} : \ty{globals}, \bn{g} : \ty{graph}, \bn{n_p} : \ty{rep_type},
+       \bn{n} : \ty{nat}, \bn{roots} : \ty{roots_t}, \bn{sh} : \ty{share},
+       \bn{ti} : \ty{val}, \bn{outlier} : \ty{outlier_t}, \bn{t_info} : \ty{GCGraph.thread_info}
+  \kw{PRE} [[ \dt{[} \fn{thread_info} \dt{;} \fn{int_or_ptr_type} \dt{]} ]]
+    \kw{PROP} (\isingraph \bn{g} \bn{outlier} \bn{n} \bn{n_p} ;
+          \fn{writable_share} \bn{sh})
+    \kw{PARAMS} (\bn{ti} ; \fn{rep_type_val} \bn{g} \bn{x_p} ; \fn{rep_type_val} \bn{g} \bn{xs_p})
+    \kw{GLOBALS} (\bn{gv})
+    \kw{SEP} (\fn{full_gc} \bn{g} \bn{t_info} \bn{roots} \bn{outlier} \bn{ti} \bn{sh} \bn{gv})
+\end{Verbatim}
+\newpage
+\begin{Verbatim}
+  \kw{POST} [ \bn{int_or_ptr_type} ]
+    \kw{EX} (\bn{p'} : \ty{rep_type}) (\bn{g'} : \ty{graph}) (\bn{t_info'} : \ty{GCGraph.thread_info}),
+      \kw{PROP} (\isingraph{} \bn{g'} \bn{outlier} (\fn{FM.from_nat}\bn{n}) \bn{p}' ;
+            \fn{gc_graph_iso} \bn{g} \bn{roots} \bn{g'} \bn{roots})
+      \kw{RETURN} (\fn{rep_type_val} \bn{g'} \bn{p'})
+      \kw{SEP} (\fn{full_gc} \bn{g'} \bn{t_info'} \bn{roots} \bn{outlier} \bn{ti} \bn{sh} \bn{gv}).
+\end{Verbatim}
+
+Following the example of the previous chapter, let us write down what this specification says in plain prose: 
+
+\begin{quote}
+Assume these preconditions hold for the C function backing \fn{C.from\_nat}:
+\begin{itemize}
+\item This function takes two arguments (\kw{PARAMS}), one for the \gls{thread info} and one for the Coq value, whose C representation can be recovered from \bn{n\_p}
+\item The first value \bn{n\_p} represents the natural number, \code{\bn{n} : \bn{nat}}, in the \gls{CertiCoq heap} graph,  as stated by \code{\isingraph{} \bn{g} \bn{outlier} \bn{n} \bn{n\_p}} in the propositional part (\kw{PROP}) of the precondition (\kw{PRE}).
+\item The entire graph \bn{g} is represented as structs and pointers in the C program's memory, as stated by the separation logic part (\kw{SEP}) of the precondition.
+\end{itemize}
+Assuming these preconditions, the following postconditions should hold for the C function backing \fn{C.from\_nat}:
+\begin{itemize}
+\item This function returns a C representation \bn{p'}, which represents the value \code{\fn{FM.from\_nat} \bn{n}} in the \gls{CertiCoq heap} graph.
+\item Anything reachable in the heap graph \bn{g} before the function call is reachable after the function call in graph \bn{g'}.
+\item The new graph \bn{g'} is represented in the C program memory, as stated by the separation logic part of the postcondition.
+\end{itemize}
+\end{quote}
+
+The next step we have to take is to generalize this specification to any \gls{foreign function} with a \fndesc{}. To achieve this generalization, we have to
+\begin{enumerate}
+\item quantify over all arguments of the \gls{foreign function}, and their C representations, % in the \kw{WITH} clause
+\item generate the C function type based on the \gls{foreign function} arity,
+\item specify in the precondition that all arguments of the \gls{foreign function} are represented by the corresponding C representation, according to our memory representation predicates,
+\item specify in the postcondition that the function result is a C representation of the correct Coq value, related to the \gls{functional model} we want with the arguments we have.
+\end{enumerate}
+
+We have solved all of these problems in \autoref{genspecctor}. Therefore, we follow the same solutions or adapt the solutions described there (such as the annotation type of \ingraphs{}) to work for this case. With these solutions, we can now define the \gls{foreign function} specification for any \gls{foreign function} description: 
+
+
+\newcommand{\fndesctofunspec}{\hyperref[code:fndesctofunspec]{\fn{fn\_\linebreak[0]desc\_\linebreak[0]to\_\linebreak[0]funspec}}}
+\begin{Verbatim}
+\kw{Definition} \fndesctofunspec{}\label{code:fndesctofunspec} (\bn{f} : \fndesc{}) : \ty{ident} \ty{*} \ty{funspec} :=
+  \kw{DECLARE} (\fn{ident_of_string} (\cname{} \bn{d}))
+  \kw{WITH} \bn{gv} : \ty{globals}, \bn{g} : \ty{graph}, \bn{roots} : \ty{GCGraph.roots_t}, \bn{sh} : \ty{share},
+       \bn{xs} : \ty{args} (\fntypereified{} \bn{d}), \bn{ps} : \ty{list} \ty{rep_type}, \bn{ti} : \ty{val},
+       \bn{outlier} : \ty{GCGraph.outlier_t}, \bn{t_info} : \ty{GCGraph.thread_info}
+   \kw{PRE'} (\fn{thread_info} \dt{::} \bn{repeat} \fn{int_or_ptr_type} (\fnarity{} \bn{d}))
+     \kw{PROP} (\fn{writable_share} \bn{sh} ;
+           \ingraphs{} \bn{g} \bn{outlier} (\fntypereified{} \bn{d}) \bn{xs} \bn{ps})
+     (\kw{PARAMSx} (\bn{ti} \dt{::} \fn{map} (\fn{rep_type_val} \bn{g}) \bn{ps})
+       (\kw{GLOBALSx} \dt{[} \bn{gv} \dt{]}
+         (\kw{SEPx} \dt{[} \fn{full_gc} \bn{g} \bn{t_info} \bn{roots} \bn{outlier} \bn{ti} \bn{sh} \bn{gv} ; \fn{library.mem_mgr} \bn{gv} \dt{]} )))
+   \kw{POST} [ \bn{int_or_ptr_type} ]
+     \kw{EX} (\bn{p'} : \ty{rep_type}) (\bn{g'} : \ty{graph})
+        (\bn{roots'}: \ty{GCGraph.roots_t}) (\bn{t_info'} : \ty{GCGraph.thread_info}),
+       \kw{PROP} (\kw{let} \bn{r} := \result{} (\fntypereified{} \bn{d}) \bn{xs} \kw{in}
+             @\isingraph{} \bn{r}\kw{.1} (@\foreigningraph{} \bn{r}\kw{.1} \bn{r}\kw{.2})
+                          \bn{g'} \bn{outlier} (\modelfn{} \bn{d} \bn{xs}) \bn{p'} ;
+             \fn{gc_graph_iso} \bn{g} \bn{roots} \bn{g'} \bn{roots'})
+       \kw{RETURN} (\fn{rep_type_val} \bn{g'} \bn{p'})
+       \kw{SEP} (\fn{full_gc} \bn{g'} \bn{t_info'} \bn{roots'} \bn{outlier} \bn{ti} \bn{sh} \bn{gv} ; \fn{library.mem_mgr} \bn{gv}).
+\end{Verbatim}
+
+\newpage
+Following the previous examples, let us explain what this specification says in plain prose: 
+
+\begin{quote}
+Assume these preconditions hold for the foreign function described by \bn{d}:
+\begin{itemize}
+\item This function takes the number of arguments specified as the arity in \bn{d}, preceded by an extra argument for the \gls{thread info}, as seen in the \kw{PRE'} clause. The C representations for these arguments are stored in the list \bn{ps}.
+\item The C representations stored in \bn{ps} represent the arguments to the \gls{foreign function} stored in the \args{} object, either in the \gls{CertiCoq heap} graph \bn{g} or the outlier set, as stated by the call to \ingraphs{}.
+\item The entire graph \bn{g} is represented as structs and pointers in the C program's memory, as stated by the separation logic part (\kw{SEP}) of the precondition.
+\end{itemize}
+Assuming these preconditions, the following postconditions should hold for the foreign function described by \bn{d}:
+\begin{itemize}
+  \item This function returns a C representation \bn{p'}, which represents the return value of the \gls{functional model} when it is called with all the arguments. This representation is according to the possible \gls{foreign type} representation of the return type.
+\item Anything reachable in the heap graph \bn{g} before the function call is reachable after the function call in graph \bn{g'}.
+\item The new graph \bn{g'} is represented in the C program memory, as stated by the separation logic part of the postcondition.
+\end{itemize}
+\end{quote}
+
+The proofs of these specifications are the work of Stark and Appel and therefore are out of the scope of this dissertation. They are covered in the tech report by Korkut, Stark, and Appel~\cite{korkutStarkAppel}.
+
+\section{Rewriting Foreign Function Calls}
+\label{modelspec}
+
+In Coq, proofs about programs are often written by unfolding definitions and reducing the resulting terms. However, our \FFI{} workflow requires users to declare all \gls{foreign type}s and \gls{foreign function}s as axioms. Since axioms cannot be unfolded, writing proofs about a program that includes references to these axioms becomes very difficult. 
+
+Although these axioms are realized when the compiled program is linked to the foreign functions on the C side, proofs about this program are checked before compilation and therefore are unavailable at this stage.
+Without a solution to this problem, users of our \FFI{} cannot prove properties about \gls{foreign type}s and \gls{foreign function}s.
+
+Our solution to this problem is to introduce a mechanism in which occurrences of these \gls{foreign type}s and \gls{foreign function}s can be rewritten into their \gls{functional model}s. Since the annotation type \foreignann{} includes a field that defines and proves an \Isomorphism{} between the components of the \gls{foreign function} type and the \gls{functional model} type, we can use this isomorphism to generate an equality between these two types. We will then assume these equalities and use them to rewrite the foreign parts into their familiar \gls{functional model}s.\footnote{For the sake of comparison, the \gls{functional model} is like the shadow of the real objects outside of the cave, hence the epigraph from Plato at the beginning of this chapter.}
+
+Now let us define a function that relates the \gls{foreign function} and its \gls{functional model}:
+
+\newcommand{\modelspecaux}{\hyperref[code:modelspecaux]{\fn{model\_\linebreak[0]spec\_\linebreak[0]aux}}}
+\newcommand{\modelspec}{\hyperref[code:modelspec]{\fn{model\_\linebreak[0]spec}}}
+
+We define a function \modelspecaux{} that traverses the \reified{} description \bn{r}, the \gls{foreign function} type \bn{pt}, and the \gls{functional model} type \bn{mt} at the same time, and generates a type that expresses the equality we described earlier:
+
+\begin{Verbatim}
+\kw{Equations} \modelspecaux{}\label{code:modelspecaux}
+          (\bn{r} : \reified{} \foreignann{})
+          (\bn{pt} : \toforeignfntype{} \bn{r})
+          (\bn{mt} : \tomodelfntype{} \bn{r}) : \ty{Prop} :=
+\modelspecaux{} (@\TYPEPARAM{} \bn{k}) \bn{pt} \bn{mt} :=
+  \kw{forall} (\bn{A} : \ty{Type}), \modelspecaux{} (\bn{k} \bn{A} \foreignannany{}) (\bn{pt} \bn{A}) (\bn{mt} \bn{A}) ;
+\modelspecaux{} (@\ARG \bn{primary} \bn{ann} \bn{k}) \bn{pt} \bn{mt} :=
+  \kw{forall} (\bn{x} : \secondary{}),
+    \modelspecaux{} (\bn{k} (\fn{to} \bn{x})) (\bn{pt} \bn{x}) (\bn{mt} (\fn{to} \bn{x})) ;
+\modelspecaux{} (@\RES{} \bn{primary} \bn{ann}) \bn{pt} \bn{mt} :=
+  \bn{pt} \ty{=} (@\fn{from} _ _ \foreigniso{} \bn{mt}).
+\end{Verbatim}
+
+\newpage
+For easier use, we define another function \modelspec{} that uses a \fndesc{} to generate the same type:
+
+\begin{Verbatim}
+\kw{Definition} \modelspec{}\label{code:modelspec} (\bn{d} : \fndesc{}) : \ty{Prop} :=
+  \modelspecaux{} (\fntypereified{} \bn{d}) (\foreignfn{} \bn{d}) (\curriedmodelfn{} \bn{d}).
+\end{Verbatim}
+
+This function generates a type that quantifies over all the arguments of the \gls{foreign function}, and asserts that these two functions give the same result for the same inputs, up to the isomorphisms in each annotation.
+
+In order to demonstrate exactly what \modelspec{} generates, let us extend the examples we used earlier in this chapter.  Here are the \gls{foreign function} descriptions for those examples:
+
+\newcommand{\fromnatdesc}{\hyperref[code:fromnatdesc]{\fn{from\_\linebreak[0]nat\_\linebreak[0]desc}}}
+\newcommand{\tonatdesc}{\hyperref[code:tonatdesc]{\fn{to\_\linebreak[0]nat\_\linebreak[0]desc}}}
+\newcommand{\adddesc}{\hyperref[code:adddesc]{\fn{add\_\linebreak[0]desc}}}
+\begin{Verbatim}
+\kw{Definition} \fromnatdesc{}\label{code:fromnatdesc} : \fndesc{} :=
+  \{| \fntypereified{} :=
+      @\ARG{} _ \ty{nat} \transparent{} (\kw{fun} _ =>
+        @\RES{} _ \ty{FM.uint63} \opaque{})
+   ; \foreignfn{} := \fn{C.from_nat}
+   ; \modelfn{} := \kw{fun} '(\bn{x}; \dt{tt}) => \fn{FM.from_nat} \bn{x}
+   ; \fnarity{} := \dt{1}
+   ; \cname{} := \dt{"int63_from_nat"}
+  |\}.
+
+\kw{Definition} \tonatdesc{}\label{code:tonatdesc} : \fndesc{} :=
+  \{| \fntypereified{} :=
+      @\ARG{} _ \ty{FM.uint63} \opaque{} (\kw{fun} _ =>
+        @\RES{} _ \ty{nat} \fn{transparent})
+   ; \foreignfn{} := \fn{C.to_nat}
+   ; \modelfn{} := \kw{fun} '(\bn{x}; \dt{tt}) => \fn{FM.to_nat} \bn{x}
+   ; \fnarity{} := \dt{1}
+   ; \cname{} := \dt{"int63_to_nat"}
+   |\}.
+\end{Verbatim}
+\newpage
+\begin{Verbatim}
+\kw{Definition} \adddesc{}\label{code:adddesc} : \fndesc{} :=
+  \{| \fntypereified{} :=
+      @\ARG{} _ \ty{FM.uint63} \opaque{} (\kw{fun} _ =>
+        @\ARG{} _ \ty{FM.uint63} \opaque{} (\kw{fun} _ =>
+          @\RES{} _ \ty{FM.uint63} \opaque{}))
+   ; \foreignfn{} := \fn{C.add}
+   ; \modelfn{} := \fn{fun} '(\bn{x}; (\bn{y}; \dt{tt})) => \fn{FM.add} \bn{x} \bn{y}
+   ; \fnarity{} := \dt{2}
+   ; \cname{} := \dt{"int63_add"}
+   |\}.
+\end{Verbatim}
+
+% \newpage
+The results of calls to \modelspec{} with those descriptions will help illustrate how \modelspec{} can be used:
+
+\vspace{.2in}
+\begin{SaveVerbatim}{E}
+\kw{Eval} \tc{cbn} \kw{in} (\modelspec{} \fromnatdesc{}).
+\end{SaveVerbatim}
+\tocoq{\UseVerbatim{E}}
+
+\begin{SaveVerbatim}{E}
+\kw{forall} \bn{x} : \ty{nat}, 
+  \fn{C.from_nat} \bn{x} \ty{=} \fn{to} (\fn{FM.from_nat} \bn{x})
+  : \ty{Prop}
+\end{SaveVerbatim}
+\fromcoq{\UseVerbatim{E}}
+
+\vspace{.1in}
+\begin{SaveVerbatim}{E}
+\kw{Eval} \tc{cbn} \kw{in} (\modelspec{} \tonatdesc{}).
+\end{SaveVerbatim}
+\tocoq{\UseVerbatim{E}}
+
+\begin{SaveVerbatim}{E}
+\kw{forall} \bn{x} : \ty{C.t}, 
+  \fn{C.to_nat} \bn{x} \ty{=} \fn{FM.to_nat} (\fn{from} \bn{x})
+  : \ty{Prop}
+\end{SaveVerbatim}
+\fromcoq{\UseVerbatim{E}}
+
+
+\vspace{.1in}
+\begin{SaveVerbatim}{E}
+\kw{Eval} \tc{cbn} \kw{in} (\modelspec{} \adddesc{}).
+\end{SaveVerbatim}
+\tocoq{\UseVerbatim{E}}
+
+\begin{SaveVerbatim}{E}
+\kw{forall} \bn{x} \bn{y} : \ty{C.t}, 
+  \fn{C.add} \bn{x} \bn{y} \ty{=} \fn{to} (\fn{FM.add} (\fn{from} \bn{x}) (\fn{from} \bn{y}))
+  : \ty{Prop}
+\end{SaveVerbatim}
+\fromcoq{\UseVerbatim{E}}
+
+\newpage
+We must make it clear here that the types \modelspec{} returns are currently not provable within our framework. In order to use these equalities, the user would have to treat them as preconditions. One possible way to do so is this:
+
+\begin{Verbatim}
+\kw{Section} \ty{UIntProofs}.
+  \kw{Variable} \fn{from_nat_spec} : \modelspec{} \fn{from_nat_desc}.
+  \kw{Variable} \fn{to_nat_spec} : \modelspec{} \fn{to_nat_desc}.
+  \kw{Variable} \fn{add_spec} : \modelspec{} \fn{add_desc}.
+  \cm{...}
+\kw{End} \ty{UIntProofs}.
+\end{Verbatim}
+
+This way we can presume these equalities generated by \modelspec{} only for the proofs about programs using \gls{foreign function}s and \gls{foreign type}s. Within those proofs, however, we can rewrite calls to those \gls{foreign function}s into calls to the functions from the \gls{functional model}, which increases our capability of writing programs that both use the \FFI{} and take advantage of dependent types.

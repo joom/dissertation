@@ -1,0 +1,22 @@
+% the abstract
+
+CertiCoq is a compiler from Coq to C that is verified in Coq. Thanks to CertiCoq's mechanically checked proof of compiler correctness, users can be sure that programs they write and verify in Coq's rich type system output the same results when compiled to C (and to machine language, via the CompCert verified compiler). However, in practice, large programs are rarely written in a single language; additional languages are used for better performance or for capabilities that the primary language lacks. In particular, because Coq lacks user-defined \gls{primitive} types, mutation, and input/output actions, CertiCoq-compiled code must interact with another language to have those capabilities. Specifically, Coq code must be able to call C code and C code must be able to inspect and generate Coq values and call Coq code. But what happens to the correctness proofs when these two languages interact?
+
+A foreign C function has to be memory-safe, return the expected result, and have only the expected side effect. A specification that expresses these requirements must combine plain Coq, for the functional parts, and a program logic for C (such as the Verified Software Toolchain [VST]), for the verification of C functions. While VST is embedded in Coq, its specification language is quite different.
+VST proofs about C \gls{foreign function}s do not directly translate to proofs about Coq \gls{primitive}s either.
+Bridging this gap by connecting plain Coq and VST theorems requires a system of techniques and methods, many of which are made feasible by using \gls{metaprogramming} as a general methodological approach. In this dissertation, I describe these techniques and methods.
+Using these methods, the user can relate \gls{foreign function}s and \glslink{foreign type}{type}s to their \gls{functional model}s, generate VST specifications about the \glslink{foreign type}{foreign} C \glslink{foreign function}{function}s, and write plain Coq proofs about the Coq counterparts of the \gls{foreign function}s.
+I also provide examples of Coq programs with \gls{primitive} types, mutation, and I/O actions, along with specifications and proofs about these programs, to demonstrate VeriFFI, the verified \ffi{} for CertiCoq.
+
+% Using the specifications and  generated through these techniques, I provide examples of Coq programs with \gls{primitive} types, mutation, and input/output actions with their correctness proofs to showcase the verified foreign function interface for CertiCoq.
+
+
+% For memory safety, users need to check that foreign C functions respect the uniform representation of Coq values in CertiCoq's heap memory. I present automatic generation of representation predicates through \gls{metaprogramming}. Using these predicates, users are empowered to write their own VST specifications and proofs for their foreign C functions. These predicates are also used to generate VST specifications and proofs for CertiCoq-generated \glue{} functions, which can be used as building blocks for the foreign C functions and their correctness proofs.
+
+% VST proofs about C functions do not directly translate to proofs about the Coq \gls{primitive}s they become. To bridge this gap, I present a principled method of relating these \gls{foreign function}s and \glslink{foreign type}{type}s to their \gls{functional model}s, which allows users to write proofs about them in plain Coq. I also provide examples of Coq programs with \gls{primitive} types, mutation, and input/output actions with their correctness proofs to showcase the verified foreign function interface for CertiCoq.
+
+
+
+
+% regarding "primitive types", Andrew says:
+% "whatever primitive types Coq has (or that the user wishes to add) must be implemented in a lower-level language"

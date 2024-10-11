@@ -1,0 +1,34 @@
+\chapter{Conclusion}
+\label{conclusion}
+
+\epigraph{[T]he C language continues to be a medium for much of the world’s working software\\—to the continued regret of many researchers.}{Stephen Kell~\cite{kell2017some}}
+
+% More something something
+
+Every approach to formal verification has a different challenge that limits its adoption and production readiness.
+The main challenge in model checking is dealing with state-space explosion~\cite{Clarke2012}, while automatic program verification à la Dafny~\cite{leino2010dafny} can struggle with convincing the SMT solver that a logical formula is valid.
+
+Using interactive theorem proving to verify software has challenges too. One tradition is to derive the software from the proof, as done by Coq's (or originally Nuprl's) traditional code extraction method~\cite{letouzey2008extraction, constable1986nuprl}, or CertiCoq~\cite{certicoq}. For programs derived in this manner, performance is the main challenge. 
+The OCaml extraction might not reach the desired performance in performance-critical domains, since it translates the data structures in Coq directly to OCaml, and those data structures are often not built with performance considerations.
+When we try to use more efficient data structures, we can cause bugs in the extracted code, since we might map Coq data types onto OCaml data types in a way that breaks our carefully constructed proofs; the new data structures are unverified and they might interact with our code in unexpected ways. 
+We do, however, get to take advantage of the optimizations in the OCaml compiler and gain performance that way.\footnote{The extraction mechanism can also extract to Haskell and Scheme, for which there are mature compilers like Glasgow Haskell Compiler~\cite{marlow2004glasgow} and Chez Scheme~\cite{dybvig2006chez}, so the same arguments apply.} On the other hand, CertiCoq, the verified compiler from Coq to C that this dissertation is based on, is not yet as performant as other functional programming language compilers~\cite{paraskevopoulou2020verified}, as only a limited number of optimizations have been implemented so far. This is partly due to the inherent overhead of having to formally verify the correctness of each new optimization pass, which can be a significant research undertaking in itself~\cite{vassilev2019, paraskevopoulou2020verified, paraskevopoulou2021compositional}.
+Alternatively, interactive theorem provers can verify code written in other languages, rather than generating code from Coq programs. Verifiable C (in VST)~\cite{appel2014program}, for verifying C code in Coq, and CFML~\cite{chargueraud2010, chargueraud2011}, for verifying OCaml code in Coq, are examples of this approach. These projects start from the original software, i.e. no software is derived from the proof, so performance of the derived software is not an issue, neither do these tools lose any guarantees later in the process.
+The approach we present in this dissertation is a hybrid of these two traditions that are solutions to the challenges of interactive theorem proving. With verified foreign functions, a user of our system can 
+\begin{itemize}
+\item write their program in Coq in a functional style, 
+\item prove properties about their program in Coq, 
+\item identify performance bottlenecks of their program, such as the underlying data structures and other computationally expensive functions,
+\item implement these data structures and other expensive functions more efficiently in C, and use them as \gls{foreign type}s and \gls{foreign function}s in their Coq programs,
+\newpage
+\item prove properties with VST about these \gls{foreign type}s and \gls{foreign function}s using the automatically generated specifications, where they use their original functional implementation as the functional model for the proofs,
+\item and preserve the proofs about their larger program since they depend on the functional model, which the user can prove to be equivalent to the foreign implementation using the proof interface.
+\end{itemize}
+
+A user of our system can keep refining their program until they are happy with the performance of the resulting program, and they can still reason about their larger program as if it is written in a functional style, while isolating the lower-level reasoning to \gls{foreign type}s and \gls{foreign function}s. This approach not only recuperates potential performance dips caused by the inadequacy of compiler optimizations, but also helps with theoretical limits associated with purely functional data structures~\cite{ponder1988applicative, amram1992pointers, pippenger96pure, okasaki1999purely}.
+
+Our system makes this hybrid workflow possible by facilitating
+\begin{itemize}
+\item the implementations of \gls{foreign type}s and \gls{foreign function}s by generating glue code,
+\item proofs about the \gls{foreign function}s by generating function specifications and memory predicates about Coq types,
+\item and the preservation of proofs about the larger program by providing a mechanism to rewrite proof obligations about programs using \gls{foreign function}s into equivalent programs using the functional model.
+\end{itemize}

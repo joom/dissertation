@@ -1,0 +1,224 @@
+\chapter{Reification with Annotations}
+\label{reified}
+
+\epigraph{
+% Reflexivity is taken for granted, as the premise for a sign system such as natural languages.\\On the other hand, t
+[T]he inherent risk of unintelligibility of reflexivity, has been noted\\ throughout human history in countless paradoxes. For example, in a Greek myth,\\Narcissus became immobile as a result of staring at his own reflection in the water.}{Kumiko Tanaka-Ishii~\cite{tanaka2010semiotics}}
+
+Obtaining a specification from a \gls{foreign function}'s type or a \constructor{}'s type requires the ability to traverse the components of the type. Such a traversal requires a method to inspect types (or at least \constructor{}s' types) as first-class constructs. In this chapter, we will examine why the existing methods fall short of serving our purposes, and we will introduce a new method that solves our problem.
+
+Traversing types is necessary in many different kinds of homogeneous code generation, therefore the generic programming and \gls{metaprogramming} literature has been preoccupied with it: The Generic Haskell literature achieved code generation at runtime through a representation of Haskell's algebraic data types by deconstructing them into a type that identifies its sums, products, and atomic components~\cite{jansson1997, hinze2003chapter}. The Template Haskell literature achieved code generation at compile time through a language \gls{primitive} that supplies information about algebraic data types~\cite{sheard2002template}.
+
+MetaCoq follows the Template Haskell tradition. MetaCoq's \fn{tmQuoteRec} command in the \TemplateMonad{} provides all the information about any inductive type and its constructors. However, this data is not designed for quick and easy consumption, as it provides a \glslink{deep embedding}{deeply embedded} description of the types, where all the terms are represented in the core language and they are not easily reflectable. The use of \fn{tmQuoteRec} we have seen in \autoref{metacoq} epitomizes the difficulty of parsing through the output in order to generate code quickly.
+
+There are two main challenges contributing to the difficulty: Firstly, the MetaCoq representation requires explicit handling of names in binders, even after converting to named representation. Secondly, the \ty{term}s obtained from MetaCoq cannot be reflected without their complete contexts. The solution we will present for our original problem of generating specifications for functions' and \constructor{}s' types, will have to address these challenges.
+
+Handling names and binders has long been a persistent issue in programming languages. One popular solution that circumvents the issue is \emph{higher-order abstract syntax}~\cite{hoas}, which allows a language implementation to depend on the binding mechanism of the \gls{host language} to implement binding for an \gls{object language}. From a dependent types point of view, using the binders of the \gls{host language} allows proper typing of all dependently typed arguments. This convenience makes higher-order abstract syntax a good starting point for our solution.
+
+However, our requirements in this thesis are different from describing terms in any language. Unlike higher-order abstract syntax, we do not need to describe a full language. We only need to describe functions' or \constructor{}s' types, where every component is a type. We need to be able to traverse the components of the type, and to consider how a given component should affect the specification for that \gls{foreign function} or \constructor{}. This requires us to consume a type and produce a specification. While dependent type systems allow us to take a type as an argument, Coq does not allow us to inspect types at runtime.\footnote{Unlike Idris 2, another dependently typed language, which has the \emph{type-case} feature that allows inspection of types at runtime.} Coq's mechanism that allows us to inspect types and obtain different values accordingly is type classes, which are resolved at compile time. Since we are not allowed to look for type class instances at runtime, we should find them at compile time and annotate our representation with the appropriate type class instances.
+
+Following the fundamental theorem of computer science\footnote{``We can solve any problem by introducing an extra level of indirection'', attributed to David J. Wheeler.}, we introduce a new way to represent function types as data, an intermediate representation between MetaCoq and function specifications. We will use \gls{metaprogramming} to obtain MetaCoq's representation of inductive types and constructors to convert them into our representation, and then we can generate the specifications we need from our intermediate representation, in pure \gls{Gallina}. This isolates \gls{metaprogramming} to the first half of this conversion, and simplifies the specification generation later, and also allows us to reason about the specification generation if we ever decide to, though we leave that as future work.
+
+At the heart of this intermediate representation is our description type, which is defined as such:
+
+\newcommand{\reified}{\hyperref[code:reified]{\ty{reified}}}
+\newcommand{\TYPEPARAM}{\hyperref[code:TYPEPARAM]{\dt{TYPEPARAM}}}
+\newcommand{\ARG}{\hyperref[code:ARG]{\dt{ARG}}}
+\newcommand{\RES}{\hyperref[code:RES]{\dt{RES}}}
+\begin{Verbatim}
+\kw{Inductive} \reified\label{code:reified} (\bn{ann} : \ty{Type} -> \ty{Type}) : \ty{Type} :=
+| \TYPEPARAM\label{code:TYPEPARAM} : (\kw{forall} (\bn{A} : \ty{Type}) `\{\bn{ann} \bn{A}\}, \reified{} \bn{ann}) -> \reified{} \bn{ann}
+| \ARG\label{code:ARG} : \kw{forall} (\bn{A} : \ty{Type}) `\{\bn{ann} \bn{A}\}, (\bn{A} -> \reified{} \bn{ann}) -> \reified{} \bn{ann}
+| \RES\label{code:RES} : \kw{forall} (\bn{A} : \ty{Type}) `\{\bn{ann} \bn{A}\}, \reified{} \bn{ann}.
+\end{Verbatim}
+
+\begin{itemize}
+\item The \TYPEPARAM{} constructor represents type parameters of a function or a \constructor{}. It takes a higher-order function as an argument, where the function takes a Coq type \bn{A} as an argument, along with a guarantee that there is an instance of the \bn{ann} type class, and returns another \reified{} description. This way the rest of the description has access to the type parameter and its type class instance in the context.
+
+\item The \ARG{} constructor represents dependent arguments of a function or a \constructor{}.
+\ARG{} takes the type of the argument, a witness that there is a type class instance for that type, and finally a higher-order function that takes an argument and returns a \reified{} description. This argument allows us to express dependently typed arguments, since the argument of the higher-order function can be occur in the rest of the description.
+
+\item Finally, the \RES{} constructor represents the result type of a function. \RES{} takes the result type, and a witness that there is a type class instance for that type.
+\end{itemize}
+
+Our representation is a combination of \emph{\gls{deep embedding}} and \emph{\gls{shallow embedding}} techniques.
+\glslink{deep embedding}{Deep embedding} is a syntactic description, where constructing an abstract syntax tree is the priority, while \gls{shallow embedding} is a representation where the terms are represented directly in their semantics~\cite{gibbons2014folding}. The description type that would solve our problems had to be traversable, therefore we defined it as an \gls{inductive type}, like a \gls{deep embedding}. In the arguments of each \constructor{}, however, we see the Coq semantics of the respective concept: for a type parameter, we have a function that takes a type parameter, for an argument we have a function that takes an argument, resembling a \gls{shallow embedding}. This approach allows us to closely resemble the original function or \constructor{}, while clearly identifying each part in the type.
+
+Using the \reified{} type, we can now describe types of functions or \constructor{}s. While we use it for generating specifications, the \reified{} type is general-purpose in essence. The \gls{parameter} \bn{ann} allows descriptions to be annotated with instances of any type class that fits the type \code{\ty{Type} \code{-}\code{>} \ty{Type}}.
+
+Before moving on to generating specifications from \reified{} descriptions, let us examine a simpler use of this type.
+Let us define a type class that tells us how to convert values of a given data type into strings, similar to Haskell's \ty{Show} type class. We can define instances of this type class for some commonly used types, such as \ty{nat}, \ty{bool}, and \ty{list}.
+
+% \kw{Instance} \fn{ToString_nat} : \ty{ToString} \ty{nat} :=
+%   \{| \fn{to_string} (\bn{n} : \ty{nat}) := \fn{string_of_nat} \bn{n} |\}.
+  
+% \kw{Instance} \fn{ToString_bool} : \ty{ToString} \ty{bool} :=
+%   \{| \fn{to_string} (\bn{b} : \ty{bool}) := \kw{if} \bn{b} \kw{then} \dt{"true"} \kw{else} \dt{"false"} |\}.
+  
+% \kw{Instance} \fn{ToString_list} \{\bn{A} : \ty{Type}\} `\{\ty{ToString} \bn{A}\} : \ty{ToString} (\ty{list} \bn{A}) :=
+%   \{| \fn{to_string} := \kw{fix} \fn{f} (\bn{xs} : \ty{list} \bn{A}) : \ty{string} :=
+%        \kw{match} \bn{xs} \kw{with}
+%        | \dt{nil} => \dt{"nil"}
+%        | \dt{cons} \bn{y} \bn{ys} => \fn{to_string} \bn{y} \fn{+}\fn{+} \dt{" :: "} \fn{+}\fn{+} \fn{f} \bn{ys}
+%        \kw{end}
+%    |\}.
+
+
+
+\newcommand{\ToString}{\hyperref[code:ToString]{\ty{ToString}}}
+\newcommand{\tostring}{\hyperref[code:tostring]{\fn{to\_\linebreak[0]string}}}
+
+\begin{Verbatim}
+\kw{Class} \ToString{}\label{code:ToString} (\bn{A} : \ty{Type}) := \{ \tostring{}\label{code:tostring} : \bn{A} -> \ty{string} \}.
+\kw{Instance} \fn{ToString_nat} : \ToString{} \ty{nat} := \cm{...}
+\kw{Instance} \fn{ToString_bool} : \ToString{} \ty{bool} := \cm{...}
+\kw{Instance} \fn{ToString_list} \{\bn{A} : \ty{Type}\} `\{\ToString{} \bn{A}\} : \ToString{} (\ty{list} \bn{A}) := \cm{...}
+\end{Verbatim}
+
+Now, suppose we want to describe the type of this function:
+
+\begin{Verbatim}
+\fn{length} : \kw{forall} \{\bn{A} : \ty{Type}\}, \ty{list} \bn{A} -> \ty{nat}
+\end{Verbatim}
+
+The function type consists of a type parameter, an argument that follows it, and finally the result type. The \reified{} description of it also follows the same order:
+
+\newcommand{\lengthdesc}{\hyperref[code:lengthdesc]{\fn{length\_\linebreak[0]desc}}}
+\begin{Verbatim}
+\kw{Definition} \lengthdesc{}\label{code:lengthdesc} : \reified{} \ToString{} :=
+  \TYPEPARAM{} (\kw{fun} (\bn{A} : \ty{Type}) \{\bn{H_A} : \ToString{} \bn{A}\} =>
+    \ARG{} (\ty{list} \bn{A}) (\kw{fun} (_ : \ty{list} \bn{A}) =>
+      \RES{} \ty{nat})).
+\end{Verbatim}
+
+The annotation type we picked, namely \ToString{}, is visible in the type of \lengthdesc{}. In the definition, the \bn{H\_A} is visible, while the annotations in the \dt{ARG} and \dt{RES} constructors are implicit arguments, so they are hidden. Since the implicit arguments are type class instances, Coq's type class resolution system should be able to figure out the instance terms. However, we can choose to write the same description with explicit annotations:
+
+\begin{Verbatim}
+\kw{Definition} \lengthdesc{} : \reified{} \ToString{} :=
+  @\TYPEPARAM{} _ (\kw{fun} (\bn{A} : \ty{Type}) \{\bn{H_A} : \ToString{} \bn{A}\} =>
+    @\ARG{} _ (\ty{list} \bn{A}) (@\fn{ToString_list} \bn{A} \bn{H_A}) (\kw{fun} (_ : \ty{list} \bn{A}) =>
+      @\RES{} _ \ty{nat} \fn{ToString_nat})).
+\end{Verbatim}
+
+\section{Consuming Reified Descriptions}
+
+\newcommand{\args}{\hyperref[code:args]{\fn{args}}}
+Now we have an example annotation, which makes it easier to demonstrate the functions that consume \reified{} descriptions. One of these functions is \args{}, which takes a \reified{} description and generates a nested dependent tuple of the types of all type parameters and arguments in the description:
+
+\begin{Verbatim}
+\kw{Fixpoint} \args{}\label{code:args} \{\bn{cls} : \ty{Type} -> \ty{Type}\} (\bn{c} : \reified{} \bn{cls}) : \ty{Type} :=
+  \kw{match} \bn{c} \kw{with}
+  | \TYPEPARAM{} \bn{k} => \{\bn{A} : \ty{Type} & \{\bn{H} : \bn{cls} \bn{A} & \args{} (\bn{k A H})\}\}
+  | \ARG{} \bn{A H k} => \{\bn{a} : \bn{A} & \args{} (\bn{k a})\}
+  | \RES{} _ _ => \ty{unit}
+  \kw{end}.
+\end{Verbatim}
+
+The type parameter case adds two fields to the tuple, one for the type, and one for the type class instance. The type class instance has to be there so that we can later call the function \bn{k}, whose result we can use for a recursive call, which allows the traversal of the \reified{} description to continue. The argument case adds one field to the tuple, the argument. The result (\RES{}) case is the base case, it adds the \ty{unit} type as a stop to the nested tuple.
+
+Notice that \args{} generates a \ty{Type} at the end, which means we can have terms that have the type \args{} of some description. For the description of the \fn{length} function we had above, this term would look as such:
+
+\newcommand{\lengthargs}{\hyperref[code:lengthargs]{\fn{length\_\linebreak[0]args\_\linebreak[0]example}}}
+\begin{Verbatim}
+\kw{Definition} \lengthargs{}\label{code:lengthargs} : \args{} \lengthdesc{} :=
+  (\ty{bool}; (\fn{ToString_bool}; ([\dt{true}; \dt{false}]; \dt{tt}))).
+\end{Verbatim}
+
+We should note that this term looks like an example call of the \fn{length} function, namely \code{@\fn{length} \ty{bool} [\dt{true}; \dt{false}]}, which should illustrate why we developed this mechanism: When we need to write a function that needs to quantify over all the arguments that a function or a \constructor{} takes, we can use \args{} of a \reified{} description to achieve that.
+
+% One such function is one 
+Let us write one such function. Since our description \lengthargs{} is annotated by the \ToString{} type class, we can design a function that would take the \args{} for a \fn{length} function as an argument, and build a \ty{string} that contains all the arguments converted to a \ty{string}. That function, generalized to any \reified{} description, would look like this:
+
+\newcommand{\appenddescs}{\hyperref[code:appenddescs]{\fn{append\_\linebreak[0]descs}}}
+% \begin{Verbatim}
+% \kw{Fixpoint} \appenddescs{}\label{code:appenddescs} (\bn{r} : \reified{} \ToString{}) : \args{} \bn{r} -> \ty{string} :=
+%   \kw{match} \bn{r} \kw{as} \bn{l} \kw{return} (\args{} \bn{l} -> \ty{string}) \kw{with}
+%   | \TYPEPARAM{} \bn{k} =>
+%       \kw{fun} '(\bn{A}; (\bn{H}; \bn{rest})) => \appenddescs{} (\bn{k} \bn{A} \bn{H}) \bn{rest}
+%   | \ARG{} \bn{A} \bn{H} \bn{k} =>
+%       \kw{fun} '(\bn{a}; \bn{rest}) => \tostring{} \bn{a} \fn{+}\fn{+} \dt{" | "} \fn{+}\fn{+} \appenddescs{} (\bn{k} \bn{a}) \bn{rest}
+%   | \RES{} \bn{A} \bn{H} => \kw{fun} '\dt{tt} => \dt{""}
+%   \kw{end}.
+% \end{Verbatim}
+
+\begin{Verbatim}
+\kw{Equations} \appenddescs{}\label{code:appenddescs} (\bn{r} : \reified{} \ToString{}) (\bn{xs} : \args{} \bn{r}) : \ty{string} :=
+\appenddescs{} (@\TYPEPARAM{} \bn{k}) (\bn{A}; (\bn{H}; \bn{rest})) :=
+  \appenddescs{} (\bn{k} \bn{A} \bn{H}) \bn{rest} ;
+\appenddescs{} (@\ARG \bn{A} \bn{H} \bn{k}) (\bn{a}; \bn{rest}) := 
+  \tostring{} \bn{a} \fn{+}\fn{+} \dt{" | "} \fn{+}\fn{+} \appenddescs{} (\bn{k} \bn{a}) \bn{rest} ;
+\appenddescs{} (@\RES{} _ _) \dt{tt} := \dt{""}.
+\end{Verbatim}
+
+This function uses dependent pattern matching, where the type of the second argument depends on the value of the first argument.
+While it is possible to write functions with dependent pattern matching in pure \gls{Gallina}, we present these function definitions using the Equations plugin~\cite{sozeau2019equations} for easier understanding. We will continue this presentation in other consumers of \reified{} descriptions when necessary, to avoid convoluted \gls{Gallina} expressions.
+
+We can observe the dependent pattern matching in how the type of the second argument changes: In the \TYPEPARAM{} case, the \args{} object, is a nested dependent pair of \bn{A}, the type, \bn{H\_A}, the \ToString{} instance, and \bn{rest}, the rest of the \args{} object.
+In the \ARG{} case, the \args{} object is a dependent pair of \bn{a}, which is the argument of type \bn{A}, and \bn{rest}, the rest of the \args{} object.
+In the \RES{} case, the \args{} function arrives at its base case, therefore the \args{} object is \dt{tt}, the constructor for the \ty{unit} type.
+This is a pattern we should expect in functions that take an \args{} object as an argument.
+
+Let us call the \appenddescs{} function with a \reified{} description and an \args{} object that fits that description, and observe the result we get:
+
+\vspace{.2in}
+\begin{SaveVerbatim}{E}
+\kw{Compute} (\appenddescs{} \lengthdesc{} \lengthargs{}).
+\end{SaveVerbatim}
+\tocoq{\UseVerbatim{E}}
+
+\begin{SaveVerbatim}{E}
+  = \dt{"true :: false :: nil | "}
+  : \ty{string}
+\end{SaveVerbatim}
+\fromcoq{\UseVerbatim{E}}
+
+
+\newcommand{\result}{\hyperref[code:result]{\fn{result}}}
+
+Now that we have seen how to write functions that consume \reified{} descriptions, such as \args{} and \appenddescs{}, we can write more functions like that. A remarkably useful one is \result{}, that traverses the \reified{} description of a function or \constructor{} type and returns the result type of that function:
+
+% \begin{Verbatim}
+% \kw{Fixpoint} \result{}\label{code:result} \{\bn{cls} : \ty{Type} -> \ty{Type}\}
+%          (\bn{c} : \reified{} \bn{cls}) : \args{} \bn{c} -> \{\bn{A} : \ty{Type} & \bn{cls} \bn{A}\} :=
+%   \kw{match} \bn{c} \kw{as} \bn{l} \kw{return} (\args{} \bn{l} -> \{\bn{A} : \ty{Type} & \bn{cls} \bn{A}\}) \kw{with}
+%   | \TYPEPARAM{} \bn{k} => \kw{fun} '(\bn{A}; (\bn{H}; \bn{rest})) => \result{} (\bn{k} \bn{A} \bn{H}) \bn{rest}
+%   | \ARG{} \bn{A} \bn{H} \bn{k} => \kw{fun} '(\bn{a}; \bn{rest}) => \result{} (\bn{k} \bn{a}) \bn{rest}
+%   | \RES{} \bn{A} \bn{H} => \kw{fun} _ => (\bn{A}; \bn{H})
+%   \kw{end}.
+% \end{Verbatim}
+
+\begin{Verbatim}
+\kw{Equations} \result{}\label{code:result} (\bn{r} : \reified{} \ToString{}) (\bn{xs} : \args{} \bn{r}) : \ty{Type} :=
+\result{} (@\TYPEPARAM{} \bn{k}) (\bn{A}; (\bn{H}; \bn{rest})) := \result{} (\bn{k} \bn{A} \bn{H}) \bn{rest} ;
+\result{} (@\ARG \bn{A} \bn{H} \bn{k}) (\bn{a}; \bn{rest}) := \result{} (\bn{k} \bn{a}) \bn{rest};
+\result{} (@\RES{} \bn{A} \bn{H}) \dt{tt} := (\bn{A}; \bn{H}).
+\end{Verbatim}
+
+We traverse the \reified{} description, by obtaining the rest of the description by calling \bn{k} and recursing. In \RES{}, our base case, we return the type that lives in the constructor field \bn{A}. This is a good example of how we reap the benefits of our representation, which is only a valid Coq term because of all the context we preserved in the higher-order abstract syntax.
+
+Now, using \args{} and \result{}, we can write a function that gives us a type that is as close as possible to the original function or \constructor{} type. In other words, we want to \glslink{reflection}{reflect} the type description to an actual Coq type:
+
+\newcommand{\reflect}{\hyperref[code:reflect]{\fn{reflect}}}
+\begin{Verbatim}
+\kw{Definition} \reflect{}\label{code:reflect} \{\bn{cls} : \ty{Type} -> \ty{Type}\} (\bn{r} : \reified{} \bn{cls}) : \ty{Type} :=
+  \kw{forall} (\bn{P} : \args{} \bn{r}), \fn{projT1} (\result{} \bn{r} \bn{P}).
+\end{Verbatim}
+
+The type we obtain from this function is essentially the uncurried version of the type of \fn{length}. A function of type \code{\reflect{} \lengthdesc{}} would take a nested dependent tuple of all the arguments (and the annotations for type parameters) and return the same result type. Here is how that function would be implemented: 
+
+\begin{Verbatim}
+\kw{Definition} \fn{length_uncurried} : \reflect{} \lengthdesc{} :=
+  \kw{fun} '(\bn{A}; (_; (\bn{l}; \dt{tt}))) => @\fn{length} \bn{A} \bn{l}.
+\end{Verbatim}
+
+The \reflect{} function provides a type-safe way for us to go from the description into the original function. Using \reflect{}, we can make sure that the function we have fits the description we were provided. 
+
+While it was feasible to derive the curried function type, which closely resembles the original \constructor{} or \gls{foreign function} type, we deliberately opted for the uncurried function in our implementation of \reflect{}. This choice was driven by the necessity of uncurried functions in our function specifications outlined in \autoref{ctorspecs} and \autoref{primspecs}.~\footnote{VST's \kw{WITH} clauses have an easier time with a nested dependent tuple of arguments than many dependent arguments. Also, the language of our \gls{foreign function}, C, has naturally uncurried functions.} 
+The other reason for this choice is that the uncurried function type includes the annotation arguments, while the curried function does not. Therefore producing the curried one from the uncurried one makes more sense than producing the uncurried one from the curried one, since we do not have to make up bogus annotations in the former. Although we avoided the latter approach in the general scenario, a specific use case taking this route (traversal of a \reified{} description without an \args{} object) is presented in \autoref{primspecs}.
+
+% Another factor in this choice was that converting a curried function to its uncurried counterpart without resorting to \gls{metaprogramming} seemed less intuitive. Our uncurried representation retains annotation arguments in \args{}, for each \TYPEPARAM{}, whereas a curried representation would ideally omit them to precisely match the original \constructor{}'s type. This would entail defining an unnatural default \bn{ann} instance applicable to any type, which would be used when invoking the functions \bn{k} during traversal of the \reified{} descriptions. 
+
+In \autoref{ctordesc} and \autoref{primdesc}, we explore detailed examples that showcase reified descriptions and their transformation into concrete Coq values. We leverage \reified{} descriptions of Coq \constructor{}s and custom \gls{primitive} functions to create VST specifications for the generated glue code and foreign functions in C.
+
+% automatic generation?
+% comparison to Prinz's work?

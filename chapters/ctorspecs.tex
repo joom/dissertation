@@ -1,0 +1,377 @@
+\chapter{Constructor Specifications}
+\label{ctorspecs}
+
+\epigraph{A good programmer builds a working vocabulary.}{Guy L. Steele Jr.~\cite{steele1998growing}}
+
+In order to compose proofs of Coq programs that build and traverse data structures, with proofs of C programs that build and traverse those same data structures, the VST separation logic function specifications for construction and projection must be coherent with the Coq constructors. To accomplish that, we introduce a novel deep and shallow \emph{\constructor{} description}, derivable automatically from MetaCoq descriptions of \glslink{inductive type}{inductive data type}s; and an interpretation of those \constructor{} descriptions into VST function specifications.
+
+Functional programmers from the ML and Haskell tradition often start their program development by defining \gls{inductive type}s and \gls{data constructor}s. This approach offers a top-down design strategy, outlining the required data structures, functions, and potential I/O operations. Should a user opt to implement certain functions as \gls{foreign function}s, these functions will likely need to manipulate constructors of the involved inductive types. To assist with this, a glue code generator is available (see \autoref{glue}), aiding users in writing their \gls{foreign function}s in C by offering building blocks for the operations themselves. However, when it comes to proving properties about these \gls{foreign function}s, users will require a different set of building blocks – ones suitable for proofs. 
+
+\newpage
+In this section, we present a framework to generate specifications for glue functions. Further work not covered in this chapter also proves these specifications about glue functions, which allows these proofs to be leveraged as building blocks in larger proofs about \gls{foreign function}s~\cite{korkutStarkAppel}.
+
+\section{Constructor Descriptions}
+\label{ctordesc}
+
+The glue code generator we presented in \autoref{glue} generates glue functions in C that construct Coq values, such as \makenil{}\, or \,\allocmakecons{}.
+
+% We need to build descriptions of \constructor{}s of \gls{inductive type}s, so that we can generate specifications of these glue functions later.
+
+% Since we eventually want to generate specifications from a \reified{} description of a constructor type, we should annotate the description with information we can use in specification generation. Let us define a type class that contains all the information we need:
+
+We need to produce formal specifications of these constructor-types in VST's specification language. We will do that with the assistance of our \reified{} semi-deep-embedded description language. As usual, \reified{} must be supplied with an appropriate annotation type. For \gls{data constructor}s we will use the following type class that contains all the information we need:
+
+\newcommand{\ctorann}{\hyperref[code:ctorann]{\ty{ctor\_\linebreak[0]ann}}}
+\newcommand{\fieldingraph}{\hyperref[code:fieldingraph]{\fn{field\_\linebreak[0]in\_\linebreak[0]graph}}}
+\newcommand{\erasure}{\hyperref[code:erasure]{\ty{erasure}}}
+\newcommand{\iserased}{\hyperref[code:iserased]{\fn{is\_\linebreak[0]erased}}}
+\begin{Verbatim}
+\kw{Variant} \erasure{}\label{code:erasure} := \dt{no_placeholder} | \dt{has_placeholder} | \dt{present}.
+
+\kw{Class} \ctorann{}\label{code:ctorann} (\bn{A} : \ty{Type}) : \ty{Type} :=
+  \{ \fieldingraph{}\label{code:fieldingraph} : \InGraph{} \bn{A}
+  ; \iserased{}\label{code:iserased} : \ty{erasure}
+  \}.
+\end{Verbatim}
+
+In \autoref{predicatedefns}, we defined the \InGraph{} type class, which consists of a graph predicate and lemmas about it for a given Coq type.
+The first field of the \ctorann{} type class is an instance of \InGraph{} for each field of the \constructor{} we want to annotate. Having \InGraph{} instances for all arguments of a constructor will later allow us to specify how the values of the arguments are represented in the heap graph.
+
+The second field, \iserased{}, tells us whether a \constructor{} field is erased during compilation. \emph{Computationally irrelevant} values, such as values of type \ty{Type}, or all values of kind \ty{Prop} are erased by CertiCoq's compilation pipeline. When they are arguments to \constructor{}s or functions, these values are represented as the unit value\footnote{The unit value is represented as the number $1$ in memory, which is the tag $0$ shifted once to the left, and the last bit set to $1$.} as a placeholder. This replacement would be easy to bake into the \InGraph{} type class: The \graphpredicate{} function would simply check if the memory representation is the number \dt{1}. While those values are erased, their places are kept and occupied by their placeholders. Some values are entirely erased in the memory representation, such as \gls{parameter}s of \gls{inductive type}s. For those cases, we want to track whether a \constructor{} argument is erased, which is what the second field of the \ctorann{} type class does. If an argument to a \constructor{} is not meant to be erased, however, we say the value is \dt{present}.
+
+Now that we have a \ctorann{} type to annotate our \reified{} descriptions with, we can define a record that contains all the information we need about a constructor:
+
+\newcommand{\ctordesc}{\hyperref[code:ctordesc]{\ty{ctor\_\linebreak[0]desc}}}
+\newcommand{\Desc}{\hyperref[code:Desc]{\ty{Desc}}}
+\newcommand{\desc}{\hyperref[code:desc]{\fn{desc}}}
+\newcommand{\ctorreified}{\hyperref[code:ctorreified]{\fn{ctor\_\linebreak[0]reified}}}
+\newcommand{\ctorreflected}{\hyperref[code:ctorreflected]{\fn{ctor\_\linebreak[0]reflected}}}
+\newcommand{\ctortag}{\hyperref[code:ctortag]{\fn{ctor\_\linebreak[0]tag}}}
+\newcommand{\ctorarity}{\hyperref[code:ctorarity]{\fn{ctor\_\linebreak[0]arity}}}
+\begin{Verbatim}
+\kw{Record} \ctordesc{}\label{code:ctordesc} :=
+  \{ \fn{ctor_name} : \ty{string}
+  ; \ctorreified{}\label{code:ctorreified} : \reified{} \ctorann{}
+  ; \ctorreflected{}\label{code:ctorreflected} : \reflect{} \fn{ctor_reified}
+  ; \ctortag{}\label{code:ctortag} : \ty{nat}
+  ; \ctorarity{}\label{code:ctorarity} : \ty{nat}
+  \}.
+\end{Verbatim}
+
+Along with the name, \gls{tag}, and arity of a constructor, we include the \reified{} description of a \constructor{}, in the \ctorreified{} field. Using dependently typed records, we include one more field, \ctorreflected{}, which is the \reflect{}ed version of the \reified{} description we just included in the record.
+
+% TODO Can we just define a function like to_prim_fn_type here and have the actual curried version of the function in the record?
+
+Here we can see some example \ctordesc{} values for the \dt{nil} and \dt{cons} constructors of the \ty{list} \gls{inductive type}:
+
+\newcommand{\nildesc}{\hyperref[code:nildesc]{\fn{nil\_\linebreak[0]desc}}}
+\begin{Verbatim}
+\kw{Definition} \nildesc{}\label{code:nildesc} : \ctordesc{} :=
+  \{| \fn{ctor_name} := \dt{"nil"}
+   ; \ctorreified{} :=
+       @\TYPEPARAM _ (\kw{fun} (\bn{A} : \ty{Type}) (\bn{H_A} : \ctorann \bn{A}) =>
+         @\RES _ (\ty{list} \bn{A}) (\{| \fieldingraph{} := \fn{InGraph_list} \bn{A} (\fieldingraph{} \bn{H_A}) 
+                           ; \fn{is_erased} := \dt{present} |\}))
+   ; \ctorreflected{} := \kw{fun} '(\bn{A}; (_; \dt{tt})) => @\dt{nil} \bn{A}
+   ; \fn{ctor_tag} := \dt{0}
+   ; \fn{ctor_arity} := \dt{0}
+   |\}.
+\end{Verbatim}
+
+\newcommand{\consdesc}{\hyperref[code:consdesc]{\fn{cons\_\linebreak[0]desc}}}
+\begin{Verbatim}
+\kw{Definition} \consdesc{}\label{code:consdesc} : \ctordesc{} :=
+  \{| \fn{ctor_name} := \dt{"cons"}
+   ; \ctorreified{} :=
+       @\TYPEPARAM _ (\kw{fun} (\bn{A} : \ty{Type}) (\bn{H_A} : \ctorann \bn{A}) =>
+         @\ARG _ \bn{A} (\{| \fieldingraph{} := \bn{H_A} 
+                    ; \fn{is_erased} := \dt{present} |\})) (\kw{fun} (\bn{x} : \bn{A}) =>
+           @\ARG _ (\ty{list} \bn{A}) (\{| \fieldingraph{} := \fn{InGraph_list} \bn{A} (\fieldingraph{} \bn{H_A}) 
+                             ; \fn{is_erased} := \dt{present} |\})) (\kw{fun} (\bn{xs} : \ty{list} \bn{A}) =>
+             @\RES _ (\ty{list} \bn{A}) (\{| \fieldingraph{} := \fn{InGraph_list} \bn{A} (\fieldingraph{} \bn{H_A}) 
+                               ; \fn{is_erased} := \dt{present} |\}))))
+   ; \ctorreflected{} := \kw{fun} '(\bn{A}; (_; (\bn{x}; (\bn{xs}; \dt{tt})))) => @\dt{cons} \bn{A} \bn{x} \bn{xs}
+   ; \fn{ctor_tag} := \dt{1}
+   ; \fn{ctor_arity} := \dt{2}
+   |\}.
+\end{Verbatim}
+
+
+We can also define a type class that allows easy transition from the real Coq \constructor{} for an \gls{inductive type}, into the \ctordesc{} for that \constructor{}:
+
+\begin{Verbatim}
+\kw{Class} \Desc{}\label{code:Desc} \{\bn{T} : \ty{Type}\} (\bn{ctor_val} : \bn{T}) :=
+  \{ \desc{}\label{code:desc} : \ctordesc{} \}.
+\end{Verbatim}
+
+\newpage
+We can define instances of \Desc{} for every constructor we generate descriptions for:
+
+\begin{Verbatim}
+\kw{Instance} \fn{Desc_nil} : \Desc{} @\dt{nil} := \{| \desc{} := \nildesc{} |\}.
+\kw{Instance} \fn{Desc_cons} : \Desc{} @\dt{cons} := \{| \desc{} := \consdesc{} |\}.
+\end{Verbatim}
+
+This way, a user of our proof interface would only have to call \code{\desc{} @\dt{nil}} or \code{\desc{} @\dt{cons}} to reach the descriptions of the \dt{nil} and \dt{cons} \constructor{}s.
+
+It might be worth noting that our \Desc{} type class does not come with a guarantee that the \reified{} description matches the real Coq value. It would, however, be possible to add a new field to the \Desc{} type class that checks if the \bn{ctor\_val} value is equal to the \gls{reflection} of the \reified{} description. We have not done this for two reasons. The first reason is that this requires careful handling of the curried and uncurried versions of the \constructor{}, and that comes with proof engineering challenges. The second reason is that describing the wrong constructor in the \Desc{} instance means the verification of the function specifications will fail later, which makes this guarantee less necessary for our use case.
+
+
+\section{Generation of Constructor Descriptions}
+\label{genctors}
+
+Generation of constructor descriptions is implemented mostly in MetaCoq, with one part discharged to \gls{Ltac} as a proof obligation, which is automatically solved by a tactic we provide. There are two interesting parts to generating a \ctordesc{}: generating the \reified{} description, for the \ctorreified{} field of the \ctordesc{} record, and generating the reflected version of that reified description, for the \ctorreflected{} field of the \ctordesc{} record.
+
+We achieve the generation of \reified{} descriptions of \constructor{}s' type through MetaCoq. MetaCoq's \tmQuoteRec{} \gls{primitive} provides all the information needed about the \constructor{}s of an \gls{inductive type}. A traversal of the types of \constructor{}s can generate the necessary \TYPEPARAM{}, \ARG{}, and \RES{} constructors. We will, however, have to generate \ctorann{} instances for each of the components. A \ctorann{} instance, as we have seen earlier, consists of an \InGraph{} instance, and a field that indicates the \erasure{} of the component in runtime. The \InGraph{} instance can be generated by the method described in \autoref{predicategen}, the \constructor{} description generator would only have to invoke that method. The remaining field of the \ctorann{} instance, \iserased{}, can be generated based on the other metadata provided by the \tmQuoteRec{} \gls{primitive}.
+
+
+We achieve the generation of a term for the \ctorreified{} field of a \ctordesc{} record through a clever \gls{Ltac} trick, invoked by MetaCoq. We use the MetaCoq \gls{primitive} \tmLemma{}, which can create a proof obligation of a given type. When we are generating a \ctordesc{}, we use \tmLemma{} to create a proof obligation of the type of \ctorreflected{}, which is \code{\reflect{} \ctorreified{}}, where \ctorreified{} is the value of an earlier field in the record. Then our MetaCoq program calls our \gls{Ltac} program to prove that obligation, which is much easier than build the proof term directly in MetaCoq.
+
+% For example, for the \dt{nil} constructor, the type of the \ctorreflected{} field will evaluate to
+Let us consider the \dt{nil} constructor as an example to see what the type of \ctorreified{} should be for a description of \dt{nil}:\footnote{The result of \kw{Compute} is presented with some syntactic sugar in these examples.}
+
+\vspace{.2in}
+\begin{SaveVerbatim}{E}
+\kw{Compute} (\reflect{} (\ctorreified{} \nildesc{})).
+\end{SaveVerbatim}
+\tocoq{\UseVerbatim{E}}
+
+\begin{SaveVerbatim}{E}
+= \kw{forall} (\bn{P} : \{\bn{A} : \ty{Type} \& \{_ : \ctorann{} \bn{A} \& \ty{unit}\}\}),
+    \ty{list} (\fn{projT1} \bn{P})
+: \ty{Type}
+\end{SaveVerbatim}
+\fromcoq{\UseVerbatim{E}}
+
+\newpage
+Similarly, let us examine the type of the \ctorreflected{} field for the \dt{cons} constructor:
+
+
+\vspace{.2in}
+\begin{SaveVerbatim}{E}
+\kw{Compute} (\reflect{} (\ctorreified{} \consdesc{})).
+\end{SaveVerbatim}
+\tocoq{\UseVerbatim{E}}
+
+\begin{SaveVerbatim}{E}
+= \kw{forall}
+    (\bn{P} : \{\bn{A} : \ty{Type} \& \{_ : \ctorann{} \bn{A} \& \{_ : \bn{A} \& \{_ : \ty{list} \bn{A} \& \ty{unit}\}\}\}\}),
+    \ty{list} (\fn{projT1} \bn{P})
+: \ty{Type}
+\end{SaveVerbatim}
+\fromcoq{\UseVerbatim{E}}
+
+The implementations of the \ctorreflected{} fields have to abide by this type. They have to provide an implementation of the original constructor, just in the uncurried type that the type of the field requires. As seen in \nildesc{} and \ctordesc{}, the \ctorreflected{} field in both returns the original constructor at the end. Now, if we are creating a proof obligation of the type \code{\reflect{} \ctorreified{}}, how do we recover the original constructor when creating the reflected version in \gls{Ltac}?
+
+This is where it helps to remember that \gls{Ltac} is a \gls{metaprogramming} facility that can pattern-match on surface-level syntax. \gls{Ltac}'s \kw{match} is more powerful\footnote{\gls{Ltac}'s \kw{match} and \tc{eval} can do what \gls{Gallina}'s match does.} than the \kw{match} expression of \gls{Gallina}, which can only pattern-match on the value of expressions. Therefore, if we create a proof obligation that contains whatever information we want to pass onto \gls{Ltac}, but still evaluates to the original proof goal we wanted to have, then we can use \gls{Ltac}'s \kw{match} to recover that information and utilize it in the \gls{Ltac} script to fill the proof obligation. In other words, we need a version of \reflect{} that takes the extra information we need to pass onto \gls{Ltac} as an argument, and then ignores it:
+
+\newcommand{\reflector}{\hyperref[code:reflector]{\fn{reflector}}}
+\begin{Verbatim}
+\kw{Definition} \reflector{}\label{code:reflector} \{\bn{cls} : \ty{Type} -> \ty{Type}\} (\bn{r} : \reified{} \bn{cls})
+                     \{\bn{k} : \ty{Type}\} (\bn{x} : \ty{k}) : \bn{Type} :=
+  \reflect{} \bn{r}.
+\end{Verbatim}
+
+Notice that the \bn{cls} and \bn{r} arguments are the same as \reflect{}, but this new function has two extra arguments, namely \bn{k} and \bn{x}. The first argument \bn{k} stands for \emph{kind}, a term commonly used to refer to types of types in languages with ML-like type systems. While Coq does not distinguish types and terms as sternly, intuition should help us understand why we need the extra argument \bn{k}. The other argument \bn{x} is meant to be used to pass the original constructor onto \gls{Ltac}. Since we want to pass the constructors before any application, they will have different types. (Or kinds, according to the intuition we discussed.) Seeing the types of bare constructors should clarify that:
+
+\vspace{.2in}
+\begin{SaveVerbatim}{E}
+\kw{Check} @\dt{nil}.
+\end{SaveVerbatim}
+\tocoq{\UseVerbatim{E}}
+
+\begin{SaveVerbatim}{E}
+@\dt{nil}
+     : \kw{forall} \bn{A} : \ty{Type}, \ty{list} \bn{A}
+\end{SaveVerbatim}
+\fromcoq{\UseVerbatim{E}}
+
+\vspace{.1in}
+\begin{SaveVerbatim}{E}
+\kw{Check} @\dt{cons}.
+\end{SaveVerbatim}
+\tocoq{\UseVerbatim{E}}
+
+\begin{SaveVerbatim}{E}
+@\dt{cons}
+     : \kw{forall} \bn{A} : \ty{Type}, \bn{A} -> \ty{list} \bn{A} -> \ty{list} \bn{A}
+\end{SaveVerbatim}
+\fromcoq{\UseVerbatim{E}}
+
+The types of bare constructors would be passed as the \bn{k} argument.
+
+Using \bn{k} and \bn{x}, we can create proof obligations such as \code{@\reflector{} \_ \ctorreified{} \_ @\dt{nil}} or \code{@\reflector{} \_ \ctorreified{} \_ @\dt{cons}}, where \ctorreified{} would be a \reified{} object held in a \ctordesc{} record. Then our \gls{Ltac} tactic can pattern-match on this goal and extract the original constructor:
+
+\newcommand{\reflecting}{\hyperref[code:reflecting]{\tc{reflecting}}}
+\newcommand{\buildctor}{\hyperref[code:buildctor]{\tc{build\_\linebreak[0]ctor}}}
+\newcommand{\reflectingaux}{\hyperref[code:reflectingaux]{\tc{reflecting\_\linebreak[0]aux}}}
+\begin{Verbatim}
+\kw{Ltac} \tc{reflecting}\label{code:reflecting} :=
+  \tc{match goal} \kw{with}
+  | [ |- @\fn{reflector} _ _ _ ?\bn{C} ] => \tc{hnf}; \reflectingaux{} \bn{C}
+  \kw{end}.
+\end{Verbatim}
+
+The \tc{reflecting\_aux} tactic, which takes the original constructor term as an argument, can then be implemented. 
+
+
+% actually (@sigT _ _)
+\begin{Verbatim}
+\kw{Ltac} \buildctor{}\label{code:buildctor} \bn{C} :=
+  \tc{match goal} \kw{with}
+  | [\bn{P} : \{_ : \ctorann{} _ & _\} |- _ ] =>
+    \tc{destruct} \bn{P}; \buildctor{} \bn{C}
+  | [\bn{P} : \{_ : _ & _\} |- _ ] =>
+    \kw{let} \bn{a} := \tc{fresh} \dt{"a"} \kw{in} \tc{destruct} \bn{P} \kw{as} [\bn{a} \bn{P}];
+    \buildctor{} \kw{constr:}(\bn{C} \bn{a})
+  | [\bn{P} : \ty{unit} |- _ ] => \tc{exact} \bn{C}
+  \kw{end}.
+
+\kw{Ltac} \reflectingaux{}\label{code:reflectingaux} \bn{C} :=
+  \kw{let} \tc{P} := \tc{fresh} \dt{"P"} \kw{in} \tc{intro} \bn{P}; \tc{simpl} \kw{in} \bn{P}; \buildctor{} \bn{C}.
+\end{Verbatim}
+
+The \reflectingaux{} tactic creates a function that takes an \args{} object of the \reified{} description and invokes \buildctor{}, which traverses the \args{} object by finding the earliest argument to the described \constructor{} and applying that argument to the original constructor as necessary, but skipping the annotations in the \args{} object. At the end of the traversal, the entire tactic sequence produces the uncurried version of the original constructor, which satisfies the type of the \ctorreflected{} field.
+
+\section{Generation of Specifications for Glue Constructors}
+\label{genspecctor}
+
+In \autoref{glue}, we introduced CertiCoq's \gls{glue code} generator. The generated C functions are meant to be used in \gls{foreign function} implementations, and they can construct, inspect, or call Coq values. 
+We want to allow users of CertiCoq's \FFI{} to write \gls{foreign function}s easily in C, and also write separation logic specifications and proofs about these functions, using the Verifiable C program logic in the Verified Software Toolchain (VST)~\cite{appel2014program}. However, the methods we discuss here are independent of the language of the foreign functions.
+
+When we prove properties of \gls{foreign function}s that use \glue{} code, we do not want to write specifications and proofs for the \glue{} functions themselves over and over again. Ideally, we would have generators for these specifications.  Generated specifications and generated proofs would serve as building blocks for \gls{foreign function} proofs, similar to how generated \glue{} functions serve as building blocks for \gls{foreign function} implementations.
+
+In this section, we describe the generation of specifications for the \glue{} functions that construct Coq values in \gls{CertiCoq heap}, such as \allocmakecons{}. Our generator can generate the specification for such a function for any \constructor{} that has a constructor description, i.e.\ a \ctordesc{} record, such as \consdesc{}.
+
+Before we start the generation of specifications, we should clarify what we want to specify about the \glue{} function that constructs a Coq value. We already discussed \allocmakecons{} in detail in \autoref{glue}, therefore that is a good example to follow here as well:
+
+\begin{Verbatim}
+\kw{Definition} \fn{alloc_make_cons_spec} (\bn{A} : \ty{Type}) `(\InGraph{} A) : \ty{funspec} :=
+  \kw{WITH} \bn{gv} : \ty{globals}, \bn{g} : \ty{graph}, \bn{x_p} : \ty{rep_type}, \bn{xs_p} : \ty{rep_type},
+       \bn{x} : \bn{A}, \bn{xs} : \ty{list} \bn{A}, \bn{roots} : \ty{roots_t}, \bn{sh} : \ty{share},
+       \bn{ti} : \ty{val}, \bn{outlier} : \ty{outlier_t}, \bn{t_info} : \ty{GCGraph.thread_info}
+  \kw{PRE} [[ \dt{[} \fn{thread_info} \dt{;} \fn{int_or_ptr_type} \dt{;} \fn{int_or_ptr_type} \dt{]} ]]
+    \kw{PROP} (\isingraph \bn{g} \bn{outlier} \bn{x} \bn{x_p} ;
+          \isingraph \bn{g} \bn{outlier} \bn{xs} \bn{xs_p} ;
+          \dt{2} \ty{<} \fn{headroom} \bn{t_info} ;
+          \fn{writable_share} \bn{sh})
+    \kw{PARAMS} (\bn{ti} ; \fn{rep_type_val} \bn{g} \bn{x_p} ; \fn{rep_type_val} \bn{g} \bn{xs_p})
+    \kw{GLOBALS} (\bn{gv})
+    \kw{SEP} (\fn{full_gc} \bn{g} \bn{t_info} \bn{roots} \bn{outlier} \bn{ti} \bn{sh} \bn{gv})
+\end{Verbatim}
+\newpage
+\begin{Verbatim}
+  \kw{POST} [ \bn{int_or_ptr_type} ]
+    \kw{EX} (\bn{p'} : \ty{rep_type}) (\bn{g'} : \ty{graph}) (\bn{t_info'} : \ty{GCGraph.thread_info}),
+      \kw{PROP} (\isingraph{} \bn{g'} \bn{outlier} (@\dt{cons} \bn{A} \bn{x} \bn{xs}) \bn{p}' ;
+            \fn{headroom} \bn{t_info'} \ty{=} \fn{headroom} \bn{t_info} \fn{-} \dt{3} ;
+            \fn{gc_graph_iso} \bn{g} \bn{roots} \bn{g'} \bn{roots} ;
+            \fn{ti_frames} \bn{t_info} \ty{=} \fn{ti_frames} \bn{t_info'})
+      \kw{RETURN} (\fn{rep_type_val} \bn{g'} \bn{p'})
+      \kw{SEP} (\fn{full_gc} \bn{g'} \bn{t_info'} \bn{roots} \bn{outlier} \bn{ti} \bn{sh} \bn{gv}).
+\end{Verbatim}
+
+This dissertation does not include a background section on VST specifications~\footnote{See \citet{appel2014program} for a formal description of VST. For an up-to-date reference manual, see \citet{appel2023verifiable}. For a introductory book, see \citet{appel2023sf}.}, therefore let us write down what this specification says in plain prose: 
+
+\begin{quote}
+Assume these preconditions hold for \allocmakecons{}:
+\begin{itemize}
+\item This function takes three arguments (\kw{PARAMS}), one for the \gls{thread info} and two Coq values, whose C representations can be recovered from \bn{x\_p} and \bn{xs\_p}.
+\item The first value \bn{x\_p} represents the head of the list, \code{\bn{x} : \bn{A}}, in the \gls{CertiCoq heap} graph,  as stated by \code{\isingraph{} \bn{g} \bn{outlier} \bn{x} \bn{x\_p}} in the propositional part (\kw{PROP}) of the precondition (\kw{PRE}).
+\item The second value \bn{xs\_p} represents the tail of the list \code{\bn{xs} : \ty{list} \bn{A}}, in the \gls{CertiCoq heap} graph, as stated by \code{\isingraph{} \bn{g} \bn{outlier} \bn{xs} \bn{xs\_p}} in the propositional part of the precondition.
+\item There are at least two words of memory (\fn{headroom}) left in the \gls{thread info} object \bn{t\_info}, which contains all the runtime information we need.
+\item The entire graph \bn{g} is represented as structs and pointers in the C program's memory, as stated by the separation logic part (\kw{SEP}) of the precondition.
+\end{itemize}
+Assuming these preconditions, the following postconditions should hold for \allocmakecons{}: 
+\begin{itemize}
+\item This function returns a C representation \bn{p'}, which represents the value \code{\dt{cons} \bn{x} \bn{xs}} in the \gls{CertiCoq heap} graph. 
+\item The number of words available (\fn{headroom}) in the \gls{thread info} object \bn{t\_info'} has decreased by 3, compared to the old \gls{thread info} object \bn{t\_info}.
+\item Anything reachable in the heap graph \bn{g} before the function call is reachable after the function call in graph \bn{g'}.
+\item Pointers into the heap graph, that are local variables of C functions on the stack that called this one, have not been changed in the memory of those frames, states as the equality of the \fn{ti\_frames} fields of the \gls{thread info} objects before and after the function call.
+\item The new graph \bn{g'} is represented in the C program memory, as stated by the separation logic part of the postcondition.
+\end{itemize}
+\end{quote}
+
+
+The specification we present above may look complicated to unfamiliar eyes, but its layers of complexity are already hidden in abstractions. Verifiable C uses VST's separation logic and CompCert's C syntax, both embedded in Coq, with custom syntax through clever uses of Coq's notation system. VeriFFI uses Verifiable C and CertiGraph to reason about the \gls{CertiCoq heap} graph, and MetaCoq to generate representation predicates about types. These predicates are used through function calls in the specification above.
+
+The next step we have to take is to generalize this specification to any \constructor{} with a constructor description. To achieve this generalization, we have to
+\begin{enumerate}
+\item \label{gen1} quantify over all arguments of the \constructor{}, and their C representations, % in the \kw{WITH} clause
+\item \label{gen2} generate the C function type based on the \constructor{} arity,
+\item \label{gen3} specify in the precondition that all arguments of the constructor are represented by the corresponding C representation, according to our memory representation predicates,
+\item \label{gen4} specify in the postcondition that the function result is a C representation of the correct Coq value, the \constructor{} we want with the arguments we have.
+\end{enumerate}
+
+\newcommand\prord[1]{\hyperref[#1]{\ordinaltoname{\getrefnumber{#1}} problem}}
+
+We solved the \prord{gen1} with the \args{} mechanism, which provides a nested tuple collection of a \constructor{}'s arguments. The \prord{gen2} is an easy problem that only requires us to repeat the C type of Coq values a given number of times. We solved the \prord{gen4} with the \ctorreflected{} mechanism, which allows us to recover the original \constructor{} from a constructor description. We only lack a solution for the \prord{gen3}. To remedy that, we can implement a function that takes a collection of arguments and invokes the memory predicate for each argument.
+
+This function would need to pattern-match on the \reified{} description of a constructor and the \args{} collection that depends on that description, therefore it has to be dependently typed. While it is possible to write functions with dependent pattern matching in pure \gls{Gallina}, like we did for \appenddescs{} or \result{}, we present this function definition using the Equations plugin~\cite{sozeau2019equations} for easier understanding:
+
+\newcommand{\ingraphs}{\hyperref[code:ingraphs]{\fn{in\_\linebreak[0]graphs}}}
+\begin{Verbatim}
+\kw{Equations} \ingraphs{}\label{code:ingraphs}
+          (\bn{g} : \ty{graph}) (\bn{outliers} : \ty{outlier_t})
+          (\bn{r} : \reified{} \ctorann{}) (\bn{xs} : \args{} \bn{r}) (\bn{ps} : \ty{list} \ty{rep_type}) : \ty{Prop} :=
+\ingraphs{} \bn{g} \bn{outliers} (@\TYPEPARAM{} \bn{k}) '(\bn{A}; (\bn{H}; \bn{xs})) \bn{ps} :=
+  \ingraphs{} \bn{g} \bn{outliers} (\bn{k} \bn{A} \bn{H}) \bn{xs} \bn{ps} ;
+\ingraphs{} \bn{g} \bn{outliers} (@\ARG _ _ _) _ \dt{[]} := \ty{False} ;
+\ingraphs{} \bn{g} \bn{outliers} (@\ARG \bn{A} \bn{H} \bn{k}) '(\bn{a}; \bn{xs}) (\bn{p} \dt{::} \bn{ps}) := 
+  \kw{match} \iserased{} \bn{H} \kw{with}
+  | \dt{no_placeholder} => \ty{True}
+  | _ => \fieldingraph{} \bn{g} \bn{outliers} \bn{a} \bn{p} \ty{/\textbackslash{}} \ingraphs{} \bn{g} \bn{outliers} (\bn{k} \bn{a}) \bn{xs} \bn{ps'} 
+  \kw{end} ;
+\ingraphs{} \bn{g} \bn{outliers} (@\RES{} _ _) _ \bn{ps} := \bn{ps} \ty{=} \dt{[]}.
+\end{Verbatim}
+
+Here this function traverses the \args{} object. Type parameters of \constructor{}s are not represented in memory, therefore that case only has a recursive call. Arguments are only represented if they are not erased. The list of C representations we start with have to match the arguments we have in the \args{} object, violating this invariant means having \ty{False} as a precondition in the constructor specification. The result case specifies that there are no more C representations passed as an argument.
+
+Now we have all the mechanisms we need to define the \constructor{} specification for any \constructor{} description:
+
+\newcommand{\allocmakespecgeneral}{\hyperref[code:allocmakespecgeneral]{\fn{alloc\_\linebreak[0]make\_\linebreak[0]spec\_\linebreak[0]general}}}
+\begin{Verbatim}
+\kw{Definition} \allocmakespecgeneral{}\label{code:allocmakespecgeneral} (\bn{c} : \ctordesc{}) : \ty{funspec} :=
+  \kw{WITH} \bn{gv} : \ty{globals}, \bn{g} : \ty{graph}, \bn{ps} : \ty{list} \ty{rep_type},
+       \bn{xs} : \args{} (\ctorreified{} \bn{c}), \bn{roots} : \ty{roots_t}, \bn{sh} : \ty{share},
+       \bn{ti} : \ty{val}, \bn{outlier} : \ty{outlier_t}, \bn{t_info} : \ty{GCGraph.thread_info}
+  \kw{PRE'} (\fn{thread_info} \dt{::} \fn{repeat} \fn{int_or_ptr_type} (\ctorarity{} \bn{c}))
+    \kw{PROP} (\ingraphs{} \bn{g} \bn{outlier} (\ctorreified{} \bn{c}) \bn{xs} \bn{ps} ;
+          \fn{Z.of_nat} (\ctorarity{} \bn{c}) \ty{<} \fn{headroom} \bn{t_info} ;
+          \fn{writable_share} \bn{sh})
+     (\kw{PARAMSx} (\bn{ti} \dt{::} \fn{map} (\fn{rep_type_val} \bn{g}) \bn{ps})
+       (\kw{GLOBALSx} \dt{[} \bn{gv} \dt{]}
+         (\kw{SEPx} \dt{[} \fn{full_gc} \bn{g} \bn{t_info} \bn{roots} \bn{outlier} \bn{ti} \bn{sh} \bn{gv} \dt{]})))
+  \kw{POST} [ \bn{int_or_ptr_type} ]
+    \kw{EX} (\bn{p'} : \ty{rep_type}) (\bn{g'} : \ty{graph}) (\bn{t_info'} : \ty{GCGraph.thread_info}),
+      \kw{PROP} (\kw{let} \bn{r} := \result{} (\ctorreified{} \bn{c}) \bn{xs} \kw{in}
+            @\isingraph{} \bn{r}\kw{.1} (@\fn{field_in_graph} \bn{r}\kw{.1} \bn{r}\kw{.2}) 
+                         \bn{g'} \bn{outlier} (\ctorreflected{} \bn{c} \bn{xs}) \bn{p'} ;
+            \fn{headroom} \bn{t_info'} \ty{=} \fn{headroom} \bn{t_info} \fn{-} \fn{Z.of_nat} (\dt{S} (\ctorarity{} \bn{c})) ;
+            \fn{gc_graph_iso} \bn{g} \bn{roots} \bn{g'} \bn{roots} ;
+            \fn{ti_frames} \bn{t_info} \ty{=} \fn{ti_frames} \bn{t_info'})
+      \kw{RETURN} (\fn{rep_type_val} \bn{g'} \bn{p'})
+      \kw{SEP} (\fn{full_gc} \bn{g'} \bn{t_info'} \bn{roots} \bn{outlier} \bn{ti} \bn{sh} \bn{gv}).
+\end{Verbatim}
+
+In plain prose, here is what this specification says:
+
+\begin{quote}
+For any \constructor{} description \bn{c}, assume these preconditions hold for the \\\fn{alloc\_\linebreak[0]make\_...} glue function for this \constructor{}:
+\begin{itemize}
+\item This function takes the number of arguments specified as the arity in \bn{c}, preceded by an extra argument for the \gls{thread info}, as seen in the \kw{PRE'} clause. The C representations for these arguments are stored in the list \bn{ps}.
+\item The C representations stored in \bn{ps} represent the arguments of the \constructor{} stored in the \args{} object in the \gls{CertiCoq heap} graph \bn{g}, as stated by the call to \ingraphs{}.
+\item There are enough words of memory (\fn{headroom}) left in the \gls{thread info} object \bn{t\_info}, which contains all the runtime information we need. The necessary number of words is one more than the \constructor{} arity.
+\item The entire graph \bn{g} is represented as structs and pointers in the C program's memory, as stated by the separation logic part (\kw{SEP}) of the precondition.
+\end{itemize}
+Assuming these preconditions, the following postconditions should hold for the \\\fn{alloc\_\linebreak[0]make\_...} glue function for this \constructor{}: 
+\begin{itemize}
+\item This function returns a C representation \bn{p'}, which represents the actual constructor value from the \ctorreflected{} applied to the arguments in the \args{} object. This value is represented in the \gls{CertiCoq heap} graph according to the memory predicate for the type this \constructor{} returns.
+\item The number of words available (\fn{headroom}) in the \gls{thread info} object \bn{t\_info'} has decreased by one more than the arity in \bn{c}, compared to the old \gls{thread info} object \bn{t\_info}. The arity is for the arguments stored in memory and the additional one is for the header.
+\item Anything reachable in the heap graph \bn{g} before the function call is reachable after the function call in graph \bn{g'}.
+\item Pointers into the heap graph, that are local variables of C functions on the stack that called this one, have not been changed in the memory of those frames, states as the equality of the \fn{ti\_frames} fields of the \gls{thread info} objects before and after the function call.
+\item The new graph \bn{g'} is represented in the C program memory, as stated by the separation logic part of the postcondition.
+\end{itemize}
+\end{quote}
+
+In this chapter, we described \constructor{} descriptions, their generation, and generation of specifications for glue functions based on the descriptions. We have proofs for these specifications as well but the proofs are currently not automatically generated. Further proof engineering should make that an achievable goal since the required mechanisms are now in place.

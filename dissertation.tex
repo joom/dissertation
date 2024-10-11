@@ -1,0 +1,67 @@
+%!TEX TS-program = xelatex 
+%!TEX encoding = UTF-8 Unicode
+
+\documentclass[School=Princeton]{Dissertate}
+
+\RequirePackage{settings}
+
+\input{glossary}
+\input{spelling}
+
+% \usepackage{draftwatermark}
+
+\begin{document}
+
+% the front matter
+\input{frontmatter/personalize}
+\maketitle
+\copyrightpage
+\newpage
+\abstractpage
+\tableofcontents
+%\authorlist
+% \listoffigures
+% \dedicationpage
+\acknowledgments
+
+\doublespacing
+
+% \pagenumbering{arabic}
+% \setcounter{page}{1}
+
+% https://github.com/suchow/Dissertate/issues/20
+\renewcommand*{\chapterheadstartvskip}{\vspace*{-2.5in}}
+
+
+% include each chapter...
+\setcounter{chapter}{0}  % start chapter numbering at 1
+\setcounter{page}{9}  % start chapter numbering at 1
+\input{chapters/introduction}
+\input{chapters/background}
+\input{chapters/ffi}
+\input{chapters/predicates}
+\input{chapters/reified}
+\input{chapters/ctorspecs}
+\input{chapters/primspecs}
+\input{chapters/examples}
+\input{chapters/examples/integer}
+\input{chapters/examples/bytestring}
+\input{chapters/examples/bytestringprint}
+\input{chapters/examples/array}
+\input{chapters/related-work}
+\input{chapters/conclusion}
+
+\renewcommand*{\chapterheadstartvskip}{\vspace*{0in}}
+\singlespacing
+
+\cleardoublepage\phantomsection
+\addcontentsline{toc}{chapter}{Glossary}
+\printglossary
+
+% the back matter
+\cleardoublepage\phantomsection
+\addcontentsline{toc}{chapter}{References}
+\bibliography{references}
+\bibliographystyle{plainnat}
+
+\end{document}

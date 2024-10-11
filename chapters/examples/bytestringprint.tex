@@ -1,0 +1,207 @@
+\section{Printing Bytestrings}
+\label{printingbytestrings}
+
+% https://stackoverflow.com/questions/57758951/what-are-freer-monads
+% https://okmij.org/ftp/Haskell/extensible/more.pdf
+% http://lambda-the-ultimate.org/node/92
+% https://sf.snu.ac.kr/publications/itrees.pdf
+
+So far, we have only implemented pure \gls{foreign function}s. Neither integers nor bytestrings have any side effects; functions that operate on them are guaranteed to return the same result every time they use the same arguments,\footnote{As long as there is enough space in the \gls{CertiCoq heap}. If not, garbage collection will fail with an error.} with no observable difference from the outside. Real programs, however, often need to have side effects, therefore we need to find a way to write effectful programs if we want to be able to express them.
+
+Two factors require us to keep the language pure even when expressing effectful programs. The first factor is that Coq does not have a default evaluation order, since its underlying type theory enjoys strong normalization and confluence~\cite{coquand1985, werner1994}. The second factor is that we use our functions in proofs and types, and we do not want proofs and types to depend on the outside world.
+
+Thankfully, we are not the first to face this conundrum. The Haskell community has encountered the same question from the beginning; in their case, Haskell's lazy evaluation made it difficult to predict when a function's side effect would be executed. Their solution was to forbid functions from having side effects\footnote{As noted in the famous XKCD comic:\\``Code written in Haskell is guaranteed to have no side effects." ``... because no one will ever run it?"~\cite{xkcd:haskell}} and to exile all side effects into the \ty{IO} monad. Effectful programs are then expressed as terms with an \ty{IO} type, \parametrized{} by the result type of the computation. For example, here are the Haskell terms that we use for printing to and scanning from the console:
+
+\begin{Verbatim}
+\fn{putStrLn} :: \ty{String} -> \ty{IO} \ty{String}
+\fn{getLine} :: \ty{IO} \ty{String}
+\end{Verbatim}
+
+Neither of these terms have side effects by themselves; they are merely \emph{action}s that we can use to build a program. The user composes these actions using the monadic bind to build larger programs. Here is an example Haskell program, written as a chain of monadic actions (without syntactic sugar, i.e.\ \kw{do} notation):
+
+\begin{Verbatim}
+\fn{main} :: \ty{IO ()}
+\fn{main} = \fn{getLine} \fn{>}\fn{>}\fn{=} (\textbackslash{}\bn{x} -> \fn{putStrLn} (\dt{"Hello "} \fn{+}\fn{+} \bn{x}))
+\end{Verbatim}
+
+This program, when executed, reads a line of user input from the console, prepends the input string with another string, and prints the new string. What triggers the execution, however, is the runtime: Haskell's runtime is hard-coded to execute the \fn{main} action when the program starts. The runtime has an interpreter for actions, which executes the left side of the bind, plugs the result in the function on the right side of the bind, and keeps interpreting. This design allows us to express effectful programs purely (since actions are values that do not have side effects before execution), provides explicit sequencing for effectful computations, and makes the execution order of effects predictable.
+
+We want to express effectful programs the same way in Coq, for which we will have to write an interpreter for actions in C.
+
+In this section, we will extend our \glslink{foreign type}{foreign} bytestring implementation from the previous section with a monad that has effectful actions to print bytestrings into a stream and to scan (read) bytestrings from a stream. The VST proofs for these functions will be addressed in future work.
+
+\subsection{The Coq Interface}
+
+Our interface will have to contain a monadic type \ty{M}, a function \fn{pure} to inject pure values into our monad (also called returning), and a function \fn{bind} to express an effect followed by more computation or effects. We also expect functions in the interface that express effects, such as \fn{print} for printing and \fn{get\_line} for taking inputs. Here is what that interface looks like as a \kw{Module Type}:
+
+\begin{Verbatim}
+\kw{Module Type} \ty{Bytestring}.
+  \cm{(* Definitions from the previous version of \ty{Bytestring} *)}
+  \kw{Parameter} \ty{M} : \ty{Type} -> \ty{Type}.
+  \kw{Parameter} \fn{pure} : \kw{forall} \{\bn{A} : \ty{Type}\}, \bn{A} -> \ty{M} \bn{A}.
+  \kw{Parameter} \fn{bind} : \kw{forall} \{\bn{A} \bn{B} : \ty{Type}\}, \ty{M} \bn{A} -> (\bn{A} -> \ty{M} \bn{B}) -> \ty{M} \bn{B}.
+  \kw{Parameter} \fn{print} : \ty{bytestring} -> \ty{M} \ty{unit}.
+  \kw{Parameter} \fn{get_line} : \ty{M} \ty{bytestring}.
+  \kw{Parameter} \ty{same_behavior} : \kw{forall} \{\bn{A} : \ty{Type}\}, \ty{M} \bn{A} -> \ty{M} \bn{A} -> \ty{Prop}.
+\kw{End} \ty{Bytestring}.
+\end{Verbatim}
+
+Notice that we have an additional element in this module type, called \ty{same\_behavior}. We will use this relation later in \autoref{modelproofseffects} to reason about actions, to assert that two actions have the same behavior.
+
+
+Following the recipe we demonstrated in the previous examples, we want to implement a \ty{C} module of the module type \ty{Bytestring}. Until now, the \ty{C} modules we have seen have consisted of \kw{Axiom}s. These axioms were only realized when a Coq program that uses them is compiled to C and the compiled program is linked to the C file containing the \gls{foreign function}s. We will, however, diverge from this recipe now.
+
+Just like how we would design a abstract syntax tree (AST) in Coq for an interpreter in Coq, we will design an AST in Coq for an interpreter in C. The user will write their programs using this AST, and compile them. The interpreter for this AST, which is written by the user of our \ffi{}, will be called from the C wrapper file described in \autoref{usage}.
+
+\begin{Verbatim}
+\kw{Module} \ty{C} <: \ty{Bytestring}.
+  \cm{(* Definitions from the previous version of \ty{C} for bytestrings *)}
+
+  \kw{Inductive} \ty{MI} : \ty{Type} -> \ty{Type} :=
+  | \dt{pureI} : \kw{forall} \{\bn{A} : \ty{Type}\}, \bn{A} -> \ty{MI} \bn{A}
+  | \dt{bindI} : \kw{forall} \{\bn{A} \bn{B} : \ty{Type}\}, \ty{MI} \bn{A} -> (\bn{A} -> \ty{MI} \bn{B}) -> \ty{MI} \bn{B}
+  | \dt{printI} : \ty{bytestring} -> \ty{MI} \ty{unit}
+  | \dt{get_lineI} : \ty{MI} \ty{bytestring}.
+
+  \kw{Definition} \ty{M} : \ty{Type} -> \ty{Type} := \ty{MI}.
+  \kw{Definition} \fn{pure} : \kw{forall} \{\bn{A} : \ty{Type}\}, \bn{A} -> \ty{M} \bn{A} := @\dt{pureI}.
+  \kw{Definition} \fn{bind} : \kw{forall} \{\bn{A} \bn{B} : \ty{Type}\}, \ty{M} \bn{A} -> (\bn{A} -> \ty{M} \bn{B}) -> \ty{M} \bn{B} := @\dt{bindI}.
+  \kw{Definition} \fn{print} : \ty{bytestring} -> \ty{M} \ty{unit} := @\dt{printI}.
+  \kw{Definition} \fn{get_line} : \ty{M} \ty{bytestring} := @\dt{get_lineI}.
+
+  \kw{Axiom} \ty{same_behavior} : \kw{forall} \{\bn{A} : \ty{Type}\}, \ty{M} \bn{A} -> \ty{M} \bn{A} -> \ty{Prop}.
+\kw{End} \ty{C}.
+\end{Verbatim}
+
+We define here an \gls{inductive type}\footnote{If we wanted to express possibly nonterminating programs, we could have described the free monad as a \emph{coinductive} type. Other than having to force the thunk explicitly from the C side, not much would have changed operationally. \citeauthor{abel2017interactive}~\cite{abel2017interactive} explore a coinductive \ty{IO} monad for Agda, which we could base a similar Coq system on.} that has \constructor{}s for both the monadic components (such as returning and binding) and the effectful \gls{foreign function}s. We then provide aliases for these \constructor{}s, because Coq modules do not allow us to use \constructor{}s to satisfy the requirements of a \kw{Module Type}. Finally, we axiomatize \ty{same\_behavior}, which will only make sense when we have a \gls{functional model} for it.
+
+With this interface, we can write the same Haskell function now in Coq:
+
+\begin{Verbatim}
+\kw{Definition} \fn{main} : \ty{C.M unit} :=
+  \fn{C.bind} \fn{C.get_line} (\kw{fun} \bn{x} => \fn{C.print} \bn{x}).
+\end{Verbatim}
+
+\subsection{The C Implementation}
+\label{printingbytestringsc}
+
+Another way we have diverged from the usual recipe is the lack\footnote{We still use \kw{CertiCoq Register} for \fn{C.pack}, \fn{C.unpack}, and \fn{C.append} on bytestrings.} of the use of \kw{CertiCoq Register} to register any of our effectful functions. This is a deliberate choice on our part; we will implement a function \fn{runM} that executes an action, and \fn{runM} will be called in the C wrapper file after computing the program result. We define \fn{runM} as such:
+
+\begin{Verbatim}
+\kw{typedef enum} \{ \dt{PURE}, \dt{BIND}, \dt{PRINT}, \dt{GETLINE} \} \ty{M};
+
+\ty{value} \fn{runM}(\kw{struct} \ty{thread_info *}\tinfo{}, \ty{value} \bn{action}) \{
+  \kw{BEGINFRAME}(\tinfo{}, \dt{2})
+  \kw{switch} (\fn{get_prog_C_MI_tag}(\bn{action})) \{
+    \kw{case} \dt{PURE}:
+      \kw{return} \fn{get_args}(\bn{action})[\dt{1}];
+    \kw{case} \dt{BIND}: \{
+      \ty{value} \bn{arg0} = \fn{get_args}(\bn{action})[\dt{2}];
+      \ty{value} \bn{arg1} = \fn{get_args}(\bn{action})[\dt{3}];
+      \ty{value} \bn{temp} = \kw{LIVEPOINTERS1}(\tinfo{}, \fn{runM}(\tinfo{}, \bn{arg0}), \bn{arg1});
+      \bn{temp} = \fn{call}(\tinfo{}, \bn{arg1}, \bn{temp});
+      \kw{return} \fn{runM}(\tinfo{}, \bn{temp});
+    \}
+    \kw{case} \dt{PRINT}: \{
+      \ty{value} \bn{arg0} = \fn{get_args}(\bn{action})[\dt{0}];
+      \fn{print_bytestring}(\bn{s});
+      \kw{return} \fn{make_Coq_Init_Datatypes_unit_tt}();
+    \}
+    \kw{case} \dt{GETLINE}:
+      \kw{return} \fn{get_line_bytestring}(\tinfo{});
+    \kw{default}:
+      \kw{return} \dt{0};
+  \}
+  \kw{ENDFRAME}
+\}
+\end{Verbatim}
+
+\newpage
+We start by defining a C \kw{enum} that makes it easier to understand what \constructor{} of \ty{C.MI} is handled, and then move on to the \fn{runM} function. \fn{runM} traverses the action AST that was built on the Coq side and returns the value inside the monad. The \dt{PURE} case is simple; we just return the argument in the constructor.\footnote{Note that the \dt{0}\textsuperscript{th} index in the array returned by \fn{get\_args} will contain the type argument for \dt{MI.pureI}.} The \dt{PRINT} and \dt{GETLINE} cases are simple to interpret, although here we elide the \fn{print\_bytestring} and \fn{get\_line\_bytestring} functions, where the complexity of these cases is hidden.
+
+The \dt{BIND} case is at the crux of our interpreter for monadic actions. We collect the monadic action and the continuation function from the \dt{MI.bindI} constructor. Then, we have to execute the monadic action to obtain the input of the continuation function, which we achieve with a recursive call to \fn{runM}. When executing this monadic action, we have to keep in mind that \bn{arg1} is not in the roots, and it should be protected if our recursive call ultimately calls the garbage collector. Once we know what input to call the continuation function with, we can \fn{call} it. The continuation function returns another monadic action, which we can pass to another recursive call to \fn{runM}.
+
+This function currently uses the C call stack to handle recursion. To avoid stack overflow errors, we can choose to implement \fn{runM} with an explicit call stack, or we can try to rewrite the action input of \fn{runM} using the associativity law of monads~\cite{wadler1992essence}, where \code{\fn{C.bind} (\fn{C.bind} \bn{m} \bn{f}) \bn{g}}\, can be rewritten to \code{\fn{C.bind} \bn{m} (\kw{fun} \bn{x} \code{=}\code{>} \fn{C.bind} (\bn{f} \bn{x}) \bn{g})}. Repeated applications of such rewrites can ensure that the action argument to \fn{C.bind} is atomic, after which we only need tail recursion to execute the remaining action. We leave this implementation detail to the users of our \ffi{}.
+
+\subsection{The Functional Model}
+
+Following the Haskell tradition~\cite{peytonjones1993imperative}, we define the \gls{functional model} of our effectful monads as a function from the state to a pair of a result and the new state. For our particular set of effects, where we only write to the console and read from the console, we model the program state as the input stream to the program and the output stream from the program. The rest of our \gls{functional model} definitions mirror the purely functional state monad~\cite{jones1995functional}.
+
+\begin{Verbatim}
+\kw{Module} \ty{FM} <: \ty{Bytestring}.
+  \cm{(* Definitions from the previous version of \ty{FM} for bytestrings *)}
+
+  \kw{Definition} \ty{state} : \ty{Type} :=
+    (\ty{string} \ty{*} \ty{string}). \cm{(* the input stream and the output stream *)}
+  \kw{Definition} \ty{M} (\bn{A} : \ty{Type}) : \ty{Type} := \ty{state} -> \bn{A} \ty{*} \ty{state}.
+  \kw{Definition} \fn{pure} \{\bn{A} : \ty{Type}\} (\bn{a} : \bn{A}) : \ty{M} \bn{A} := \kw{fun} \bn{s} => (\bn{a}, \bn{s}).
+  \kw{Definition} \fn{bind} \{\bn{A} \bn{B} : \ty{Type}\} (\bn{m} : \ty{M} \bn{A}) (\bn{f} : \bn{A} -> \ty{M} \bn{B}) : \ty{M} \bn{B} :=
+    \kw{fun} \bn{s} => \kw{let} '(\bn{a}, \bn{s'}) := \bn{m} \bn{s} \kw{in} \bn{f} \bn{a} \bn{s'}.
+
+  \kw{Definition} \fn{print} (\bn{x} : \ty{bytestring}) : \bn{M} \ty{unit} :=
+    \kw{fun} '(\bn{input}, \bn{output}) => (\dt{tt}, (\bn{input}, \fn{append} \bn{output} \bn{x})).
+
+  \kw{Definition} \fn{get_line} : \ty{M} \ty{bytestring} :=
+    \kw{fun} '(\bn{input}, \bn{output}) => (\fn{substring} \dt{0} \bn{n} \bn{input},
+        (\fn{substring} \bn{n} (\fn{length} \bn{input}) \bn{input}, \bn{output})).
+
+  \kw{Definition} \fn{same_behavior} {\bn{A}} (\bn{a1} \bn{a2} : \ty{M} \bn{A}) : \ty{Prop} :=
+    \kw{forall} (\bn{s} : \ty{state}), \bn{a1} \bn{s} \ty{=} \bn{a2} \bn{s}.
+\kw{End} \ty{FM}.
+\end{Verbatim}
+
+Before we move on to the proofs about our \gls{functional model}, let us observe our \fn{same\_behavior} definition above. We left its definition as an axiom in the \ty{C} module with no intention of realizing its definition on the C side, but we are actually providing a Coq definition in the \gls{functional model}. We do not need to provide a definition in the \ty{C} module; \fn{same\_behavior} returns a \ty{Prop}, which is erased by CertiCoq. Therefore \fn{same\_behavior} itself never has computationally relevant content. In \ty{FM}, however, we need a real definition so that we can later rewrite the uses of \ty{C.same\_behavior} into \ty{FM.same\_behavior} and proceed with the proof.
+
+\subsection{Model Proofs for Foreign Functions}
+\label{modelproofseffects}
+
+In the previous examples of the \ffi{}, we have used Coq's equality type \ty{=} to claim equalities between values of a \gls{foreign type}. Unfortunately, this approach does not make sense for effectful actions; these values are ASTs of actions and the equality of the AST is not correlated with the equality of the output when the actions are executed. It is possible for two action ASTs to be different and have the same output when executed, just as it is possible for two ASTs to be the same and have different outputs. Therefore, we will use the \fn{same\_behavior} relation that we included in our interface.
+
+\begin{Verbatim}
+\kw{Section} \ty{BytestringProofs}.
+
+\cm{(* Generation of foreign function descriptions. *)}
+\kw{Parameter} \fn{pure_spec}.
+\kw{Parameter} \fn{bind_spec}.
+\kw{Parameter} \fn{print_spec}.
+\kw{Parameter} \fn{get_line_spec}.
+\kw{Parameter} \fn{same_behavior_spec}.
+\end{Verbatim}
+
+We use the mechanisms in \autoref{genspecprim} and \autoref{modelspec} to set ourselves up to rewrite functions from \ty{C} to their \ty{FM} counterparts. We are now ready to prove a simple result about printing bytestrings, following a similar idea to that of \citeauthor{swierstra2007beauty}~\cite{swierstra2007beauty}, who provide a functional semantics for the ``awkward squad" to reason about impure code:
+\newpage
+\begin{Verbatim}
+\kw{Theorem} \fn{print_steps} :
+  \kw{forall} (\bn{a} \bn{b} : \ty{C.bytestring}),
+    \ty{C.same_behavior} (\fn{C.bind} (\fn{C.print} \bn{a}) (\kw{fun} _ => \fn{C.print} \bn{b}))
+                    (\fn{C.print} (\fn{C.append} \bn{a} \bn{b})).
+\kw{Proof}.
+  \tc{intros} \bn{a} \bn{b}.
+
+  \tc{eapply} (\fn{transport} \fn{id}). \tc{symmetry}.
+  \tc{eapply} (\fn{same_behavior_spec} \ty{unit}); \tc{simpl}.
+  \tc{foreign_rewrites}.
+  \tc{unfold} \ty{FM.same_behavior}.
+
+  \tc{props} \fn{bind_spec}.
+  \tc{foreign_rewrites}.
+  \tc{unfold} \fn{FM.bind}.
+
+  \tc{props} \fn{print_spec}.
+  \tc{foreign_rewrites}.
+  \tc{unfold} \fn{FM.print}.
+
+  \tc{props} \fn{append_spec}.
+  \tc{foreign_rewrites}.
+  \tc{unfold} \fn{FM.append}.
+
+  \tc{intros} [\bn{instream} \bn{outstream}].
+  \tc{rewrite} \fn{append_assoc}; \tc{auto}.
+\kw{Qed}.
+
+\kw{End} \ty{BytestringProofs}.
+\end{Verbatim}
+
+We provide the type argument \ty{unit} to \fn{same\_behavior\_spec}, since our example program has the type \ty{C.M unit}. Then we rewrite \ty{C} terms to their \ty{FM} counterparts, unfold the \ty{FM} definitions, and finish the proof.
+
+Unlike the model proof in \autoref{integers}, our model proof on monadic effects does not let us rewrite a theorem statement about functions from \ty{C} into a theorem statement about functions from \ty{FM} all at once. Since the rest of the monadic action depends on the result of the continuation, we can only rewrite and unfold one step at a time. Once the \gls{functional model} definition of the continuation is evaluated, we can rewrite and unfold it once again.

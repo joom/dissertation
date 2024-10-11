@@ -1,0 +1,45 @@
+\chapter{Introduction}
+\label{introduction}
+
+\epigraph{A bird may love a fish but where would they build a home together?}{Tevye, Fiddler on the Roof (play by Joseph Stein, 1964)}
+
+If you have ever visited a bilingual household, you may have heard people mix languages. For example, remarks like ``\textit{Oy vey}, I can't \textit{schlep} all the way to New Jersey!" would not be unusual in a household where both English and Yiddish are spoken. The main reason for this switch of languages within a single sentence is the desire for higher expressive power. There is no good English translation for \textit{oy vey}, and ``have a tedious and exhausting trip" is a mouthful, while \textit{schlep} is easy to say. By using phrases and words from another language, one can articulate ideas more effectively or efficiently!
+
+A similar need arises in programming languages as well.
+When a single language is not sufficiently expressive or when it lacks certain capabilities, programmers turn to additional languages whose features can be used within the first language. Programs written in this way are referred to as \emph{multilanguage programs}~\cite{matthews2008meaning}.
+Another compelling reason to opt for multilanguage programs is code reuse. If you already have a substantial portion of your program written in another language, it is practical to simply call that code from your primary language, use its results, and call it a day. Consequently, almost all programs in the modern software world are multilanguage programs, as it helps save both time and money.
+\newpage
+
+In contrast to how modern software is written, efforts to formally verify software predominantly concentrate on specifying and proving the correctness of programs composed in a single language.
+The question of how to verify multilanguage programs has attracted great theoretical interest~\cite{ahmed2015verified, patterson2017, patterson2022, patterson2023}, but when I embarked on this dissertation  these solutions had not yet been implemented in a real programming language setting.
+Since then, some projects have addressed this question for a setting where the higher-level language is restricted~\cite{cheung2022, gueneau2023melocoton}. In this dissertation, I will address this question for a setting where the higher-level language is a full, dependently typed, purely functional programming language called Coq, and the lower-level language is C. My dissertation does not constitute a complete answer to this question, but it provides a road map for one and introduces mechanisms that automate some steps in the process.
+
+In this dissertation, I present a framework in which CertiCoq~\cite{certicoq}, a verified compiler from Coq to C, implemented and verified in Coq, can be used to implement a \ffi{} that allows verification of \gls{foreign function}s. I will explain how we generate C \gls{glue code} about Coq inductive types and functions, how we generate separation logic specifications about the \gls{glue code}, how to use the generated \gls{glue code} in our \gls{foreign function}s, how we generate separation logic specifications about the \gls{foreign function}s in relation to their \gls{functional model}, and finally how we generate axioms that can rewrite propositions about opaque \gls{foreign function}s. All the separation logic specifications and proofs in this dissertation are written in Coq, using the Verified Software Toolchain (VST)~\cite{appel2014program}.
+
+This dissertation, however, does not provide a mechanized proof that the axioms we generate about \gls{foreign function}s are justified by the soundness of the VST system. This thesis also does not attempt to provide an overall proof of correctness for code generation that includes \gls{foreign function}s~\cite{belanger2019verified}. These points are left as future work, and we believe these are achievable goals.
+
+While the methods we discuss in this dissertation are described for a \ffi{} to C, the methods themselves are language-agnostic. One can apply the same methods to build a \ffi{} on top of a CertiCoq backend for a different language. One such backend already exists for WebAssembly~\cite{meier2023certicoq}, and others may be implemented in the future. Our \gls{glue code} generation, \constructor{} and \gls{foreign function} description generation, and specification generation can be used for a future \ffi{} project for these backends.
+
+% Of course, \FFI{}s have been around since 1958~\cite{fortran2},
+
+% maybe something about linking being around in the 40s? I think the linkers book mentions this.
+
+
+\section{Contributions}
+
+From a more technical standpoint, the main contributions of this dissertation consist of:
+\begin{enumerate}
+\item a \ffi{} that allows dependently typed \gls{foreign function}s\\ (\autoref{usage})
+\item type-specific representation predicates of Coq values for the CertiCoq compiler \\(\autoref{predicatedefns})
+\item techniques in MetaCoq that allow generation of representation predicates (\autoref{predicategen})
+\item a novel way to \glslink{reification}{reify} Coq types, which is a hybrid of deep and shallow embedding of Coq types, augmented by annotations of each component (\autoref{reified})
+\item a method for generating VST function specifications from constructor descriptions and \gls{foreign function} descriptions (\autoref{ctorspecs} and \autoref{primspecs})
+\item a method for generating rewrite principles about the \gls{foreign function}s based on their \gls{functional model}s (\autoref{modelspec})
+\item examples of \gls{foreign function}s and \gls{foreign type}s for Coq, including effectful programs, expressed through monads (\autoref{examples}).
+\end{enumerate}
+
+If you want to compile, try, or use the code described in this dissertation, everything is available online. The verified compiler from Coq to C discussed in this thesis, CertiCoq, is available at \url{https://github.com/CertiCoq/certicoq}. The proof library about its \ffi{}, VeriFFI, is available at \url{https://github.com/CertiCoq/VeriFFI}.
+
+
+% Andrew's note:
+% Perhaps you can add a 7th contribution; let's discuss this.   After my discussions with Bas Spitters about his WASM back-end for CertiCoq, I strongly suspect that your constructor-descriptions (etc.) and other things you're describing in Chapter 5, you have done in a way that is immediately applicable to any low-level language, including C and WASM.   So you could perhaps count this as a contribution, that is, identifying a language-independent way of describing language embeddings of Coq types and function-specs.

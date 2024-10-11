@@ -1,0 +1,198 @@
+% \newglossaryentry{compiler}{
+%     name={compiler},
+%     description={A program that translates a programming language into another}
+% }
+
+% \newglossaryentry{primitive type}{
+%     name={primitive type},
+%     description={A type that cannot be inspected further}
+% }
+
+\newglossaryentry{metaprogramming}{
+    name={metaprogramming},
+    description={Writing programs that inspect existing programs or generate new programs}
+}
+
+\newglossaryentry{shallow embedding}{
+    name={shallow embedding},
+    description={A description of an object language that uses the semantics of the host language to implement corresponding features}
+}
+
+\newglossaryentry{deep embedding}{
+    name={deep embedding},
+    description={A description of an object language where the syntax tree of the object language is data in the host language}
+}
+
+\newglossaryentry{FFI}{
+    name={foreign function interface (FFI)},
+    description={A multilanguage programming style in which one language imitates the calling conventions of the other languages so that the two languages can call each other. Consists of \gls{foreign function}s and \gls{foreign type}s}
+}
+\newcommand{\ffi}{\glslink{FFI}{foreign function interface}}
+\newcommand{\FFI}{\glslink{FFI}{FFI}}
+
+\newglossaryentry{boxed}{
+    name={boxed},
+    description={A value that is represented in memory with indirection, such as a pointer into a separate data structure that holds information}
+}
+
+\newglossaryentry{unboxed}{
+    name={unboxed},
+    description={A value that is represented without a memory indirection, as a nonpointer}
+}
+
+\newglossaryentry{boxity}{
+    name={boxity},
+    description={Whether a value is \emph{\gls{boxed}} or \emph{\gls{unboxed}}}
+}
+
+\newglossaryentry{inductive type}{
+    name={inductive type},
+    description={A generalized version of algebraic data types, used for defining custom data types in Coq}
+}
+
+\newcommand{\constructor}{\glslink{data constructor}{constructor}}
+\newcommand{\Constructor}{\glslink{data constructor}{Constructor}}
+\newglossaryentry{data constructor}{
+    name={data constructor},
+    description={The only way of creating a value of an inductive type. Also simply referred to as ``constructor"}
+}
+
+\newglossaryentry{type constructor}{
+    name={type constructor},
+    description={The name of a type, with no arguments applied, such as \vec{} for the vector type}
+}
+
+
+\newcommand{\parametrized}{\glslink{parameter}{parametrized}}
+\newglossaryentry{parameter}{
+    name={parameter},
+    description={An argument to the inductive type constructor that cannot vary between data constructors of that type}
+}
+
+\newcommand{\indices}{\glslink{index}{indices}}
+\newglossaryentry{index}{
+    name={index},
+    description={An argument to the inductive type constructor that can vary between data constructors of that type}
+}
+
+\newcommand{\header}{\glslink{header-memory}{header}}
+\newglossaryentry{header-memory}{
+    name={header (memory)},
+    description={An extra field where metadata about whatever comes afterwards can live}
+}
+
+\newcommand{\glue}{\glslink{glue code}{glue}}
+\newglossaryentry{glue code}{
+    name={glue code},
+    description={Functions that help programmers inspect, construct, or call one language's values from another language. For CertiCoq's generated glue code, see \autoref{glue}}
+}
+
+\newcommand{\tinfo}{\glslink{thread info}{\bn{tinfo}}}
+\newglossaryentry{thread info}{
+    name={thread info},
+    description={A C \kw{struct} that holds the necessary information for the CertiCoq runtime to work, such as the call stack, the location of the \gls{CertiCoq heap}, and the location of the next allocatable spot in that heap. Often shortened to \tinfo{} when used in code}
+}
+
+\newglossaryentry{CertiCoq heap}{
+    name={CertiCoq heap},
+    description={The region in memory the CertiCoq runtime primarily operates on, and is garbage collected by the CertiCoq runtime}
+}
+\newglossaryentry{C heap}{
+    name={C heap},
+    description={The region in memory outside of the \gls{CertiCoq heap}. Memory management of this region is the user's responsibility}
+}
+
+\newglossaryentry{tag}{
+    name={tag},
+    description={The index of a constructor in the inductive type definition. Not the same thing as an \gls{ordinal}}
+}
+
+\newglossaryentry{ordinal}{
+    name={ordinal},
+    description={The index of a constructor within the constructors of that inductive type with the same \gls{boxity}. Not the same thing as a \gls{tag}}
+}
+
+\newglossaryentry{closure}{
+    name={closure},
+    description={The value form of a function in a functional programming language. It consists of a function and an environment, where the environment contains values for the free variables in the function body}
+}
+
+\newglossaryentry{locally nameless}{
+    name={locally nameless},
+    description={A representation for variables where free variables are represented as names, while bound variables are represented as de Bruijn indices}
+}
+
+% \renewcommand{\quote}{\glslink{quotation}{quote}}
+\newcommand{\quoting}{\glslink{quotation}{quoting}}
+\newcommand{\reification}{\glslink{reification}}
+\newglossaryentry{quotation}{
+    name={quotation},
+    description={Converting a Coq expression into a syntax tree representing the expression. It is a method of \gls{reification}}
+}
+\newglossaryentry{reification}{
+    name={reification},
+    description={The act of representing a piece of code as data, or as a first-class object. \Gls{quotation} is an example of \gls{reification}}
+}
+\newcommand{\unquote}{\glslink{unquotation}{unquote}}
+\newcommand{\unquoting}{\glslink{unquotation}{unquoting}}
+\newcommand{\reflection}{\gls{reflection}}
+\newglossaryentry{unquotation}{
+    name={unquotation},
+    description={Converting a syntax tree representing the Coq expression into the actual Coq expression represented by the tree. It is a method of \gls{reflection}}
+}
+\newglossaryentry{reflection}{
+    name={reflection},
+    description={The act of converting data, or a first-class object, into code. \Gls{unquotation} is an example of \gls{reflection}}
+}
+
+\newglossaryentry{Gallina}{
+    name={Gallina},
+    description={The language of terms in Coq. Also see \gls{Ltac} and \gls{Vernacular}}
+}
+\newglossaryentry{Ltac}{
+    name={Ltac},
+    description={The language of tactics in Coq. Explained in more detail in \autoref{ltac}. Also see \gls{Gallina} and \gls{Vernacular}}
+}
+\newglossaryentry{Vernacular}{
+    name={Vernacular},
+    description={The language of commands in Coq. Also see \gls{Gallina} and \gls{Ltac}}
+}
+
+\newglossaryentry{source language}{
+    name={source language},
+    description={The language a compiler translates from}
+}
+\newglossaryentry{target language}{
+    name={target language},
+    description={The language a compiler translates to}
+}
+\newglossaryentry{host language}{
+    name={host language},
+    description={The language the compiler is implemented in}
+}
+\newglossaryentry{object language}{
+    name={object language},
+    description={A language the compiler implements. Both the \glslink{source language}{source} and \gls{target language}s are object languages in a compiler}
+}
+\newglossaryentry{meta language}{
+    name={meta language},
+    description={For a compiler context, see \gls{host language}. For a \gls{metaprogramming} system: the language the user would write code in, as opposed to the \gls{object language} of the generated code}
+}
+
+\newglossaryentry{primitive}{
+    name={primitive},
+    description={The simplest building block of a programming language, not defined in terms of other types or values in the same language. We consider \gls{foreign function}s and \gls{foreign type}s \gls{primitive}s of a language as well}
+}
+\newglossaryentry{foreign function}{
+    name={foreign function},
+    description={A function that is implemented in a different language than the primary programming language}
+}
+\newglossaryentry{foreign type}{
+    name={foreign type},
+    description={A type whose values are defined in a different language than the primary programming language}
+}
+
+\newglossaryentry{functional model}{
+    name={functional model},
+    description={A program written in Coq that implements the same function we want to prove algorithms about. It is often easier to use a \gls{functional model} as an intermediate step in proving that an imperative program satisfies a high-level specification. We can prove separately that the \gls{functional model} satisfies high-level specification, and that the imperative program implements the same thing as the functional model~\cite{appel2020floating, appel2022coq}}
+}

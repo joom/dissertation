@@ -1,0 +1,180 @@
+\newcommand{\CertiCoq}{\textsc{CertiCoq}}
+
+\newcommand\makesinglequotestraight{% 
+  \begingroup\lccode`~=`'
+  \lowercase{\endgroup\let~}\textquotesingle
+  \catcode`'=\active
+}
+\newcommand\makedblquotestraight{% 
+  \begingroup\lccode`~=`"
+  \lowercase{\endgroup\let~}\textquotedbl
+  \catcode`"=\active
+}
+
+\usepackage{fvextra}
+% \usepackage{fancyvrb}
+% \usepackage[T1]{fontenc}
+\fvset{commandchars=\\\{\}}
+\fvset{baselinestretch=1}
+\fvset{codes={\makesinglequotestraight\makedblquotestraight}}
+\fvset{fontsize=\fontsize{13pt}{13pt}}
+\fvset{baselinestretch=1.1}
+
+\usepackage{tcolorbox}
+\usepackage{amssymb}
+\newcommand\fakeslant[1]{%
+  \special{pdf: literal 1 0 0.167 1 0 0 cm}#1\special{pdf: literal 1 0 -0.167 1 0 0 cm}}
+\definecolor{CodeRed}{HTML}{BC0045}
+\definecolor{CodeBrightRed}{HTML}{F04018}
+\definecolor{CodeBlue}{HTML}{0000d6}
+\definecolor{CodeGreen}{HTML}{008b00}
+\definecolor{CodeLilac}{HTML}{AC22BF}
+\definecolor{CodeYellow}{HTML}{E16800}
+\definecolor{CodeLightBlue}{HTML}{A4CDFF}
+\definecolor{CodeTurquoise}{HTML}{008B73}
+\newcommand{\CodeTactic}[1]{\textcolor{CodeGreen}{\textbf{#1}}}
+\newcommand{\CodeData}[1]{\textcolor{CodeRed}{#1}}
+\newcommand{\CodeType}[1]{\textcolor{CodeBlue}{#1}}
+\newcommand{\CodeBound}[1]{\textcolor{CodeLilac}{\fakeslant{#1}}}
+\newcommand{\CodeFunction}[1]{\textcolor{CodeGreen}{#1}}
+\newcommand{\CodeMetavar}[1]{\textcolor{CodeYellow}{#1}}
+\newcommand{\CodeKeyword}[1]{{\textbf{#1}}}
+\newcommand{\CodeImplicit}[1]{{\itshape \CodeBound{#1}}}
+\newcommand{\ty}[1]{\CodeType{\texttt{#1}}}
+\newcommand{\kw}[1]{\CodeKeyword{\texttt{#1}}}
+\newcommand{\fn}[1]{\CodeFunction{\texttt{#1}}}
+\newcommand{\tc}[1]{\CodeTactic{\texttt{#1}}}
+\newcommand{\dt}[1]{\CodeData{\texttt{#1}}}
+\newcommand{\bn}[1]{\CodeBound{\texttt{#1}}}
+\newcommand{\cm}[1]{\textcolor{darkgray}{\textbf{\texttt{#1}}}}
+\newcommand{\code}[1]{\mbox{\texttt{#1}}}
+
+
+% \usepackage{kantlipsum} % for dummy text
+\usepackage{calc}
+\newlength{\calloutheight}
+\newlength{\calloutoffset}
+\newlength{\quoteheight}
+\setlength{\calloutoffset}{2ex}
+\usepackage{tikz}
+
+
+% \usepackage{showlabels} % for debugging labels
+
+
+% \calloutquote{}{\begin{Verbatim}\kw{Check} <% \dt{true} %>.\end{Verbatim}}
+
+
+% \newenvironment{cf}
+%     {\begin{tcolorbox}[
+%         colback=blue!10,
+%         boxrule=0pt,sharp corners,
+%         left=0pt,right=0pt,top=0pt,bottom=0pt]
+%     }
+%     {\end{tcolorbox}}
+% \newenvironment{ct}
+%     {\begin{tcolorbox}[
+%         colback=yellow!10!white,
+%         boxrule=0pt, sharp corners,
+%         left=0pt,right=0pt,top=0pt,bottom=0pt]
+%     }
+%     {\end{tcolorbox}}
+
+    
+
+% \begin{cf}
+% \begin{Verbatim}
+% \kw{Check} <% \dt{true} %>.
+% \end{Verbatim}
+% \end{cf}
+% \begin{ct}
+% \begin{Verbatim}
+% \dt{tConstruct}
+%   \{| \fn{inductive_mind} := (\dt{MPfile} [\dt{"Datatypes"}; \dt{"Init"}; \dt{"Coq"}], \dt{"bool"})
+%    ; \fn{inductive_ind} := \dt{0} |\} \dt{0} \dt{[]} : \ty{term}
+% \end{Verbatim}
+% \end{ct}
+
+
+% Coq speech bubbles
+\usepackage{tikz}
+\usepackage{xcolor}
+\definecolor{linegray}{RGB}{212,212,212}
+\definecolor{circgray}{RGB}{199,199,199}
+
+\def\tocoq#1{
+  \hphantom{.}\hfill\begin{tikzpicture}
+    \draw (0,0) node[anchor=north east,rectangle,rounded corners=2,fill=yellow!10!white, scale=0.9,draw=circgray] {
+      \hspace{.1in}
+      \begin{minipage}[c]{5.185in}
+        % \vphantom{.}
+        % \vspace{.1in}
+        \raggedright \hfill\vspace{-0.5\baselineskip} #1 \hfill\vspace{-0.5\baselineskip}
+        \tiny \color{yellow!10!white}.
+        % \vspace{.1in}
+      \end{minipage}
+      \hspace{.1in}
+    };
+    \fill[yellow!10!white] (-0.01in,-0.08in) -- (0.08in,-0.16in) -- (-0.01in,-0.24in) -- cycle;
+    \draw[circgray] (0,-0.08in) -- (0.08in,-0.16in) -- (0in,-0.24in);
+  \end{tikzpicture}
+  % \vspace{.05in}
+}
+
+\def\fromcoq#1{
+  \begin{tikzpicture}
+    \draw (-.6,-.3) node[scale=4, path picture={
+        \node at (path picture bounding box.center){
+          \includegraphics[width=.2in]{figures/coq.png}
+        };
+      }
+    ] {};
+    \draw (0,0) node[anchor=north west,rectangle,rounded corners=2,fill=white, scale=0.9,draw=linegray] {
+      % \vspace{.1in}
+      \hspace{.1in}
+      \begin{minipage}[c]{5.185in}
+        % \vspace{.1in}
+        \raggedright \hfill\vspace{-0.5\baselineskip} #1 \hfill\vspace{-0.5\baselineskip}
+        \tiny \color{white}
+        % \vspace{.1in}
+      \end{minipage}
+      \hspace{.1in}
+      % \vspace{.1in}
+    };
+    \fill[white] (0.01in,-0.08in) -- (-0.08in,-0.16in) -- (0.01in,-0.24in) -- cycle;
+    \draw[linegray] (0,-0.08in) -- (-0.08in,-0.16in) -- (0in,-0.24in);
+  \end{tikzpicture}
+  % \vspace{.05in}
+}
+
+
+
+\usepackage{epigraph}
+\setlength{\epigraphwidth}{1\textwidth}
+% \setlength{\beforeepigraphskip}{0em}
+% \setlength{\afterepigraphskip}{-1em}
+
+\renewcommand{\textflush}{flushright} \renewcommand{\sourceflush}{flushright}
+
+\let\originalepigraph\epigraph 
+\renewcommand\epigraph[2]{\vspace{-6em}\originalepigraph{\textit{#1}\vspace{-0.8em}}{\textsc{#2}}}
+
+\usepackage{todonotes}
+
+\counterwithout{footnote}{chapter} % continuous footnote numbering
+
+\usepackage{etoolbox}
+\AtBeginEnvironment{quote}{\par\singlespacing\small}
+
+\usepackage{numname}
+\usepackage{float}
+
+\usepackage[english]{babel}
+\usepackage{hyperref}
+\addto\extrasenglish{%
+  \def\chapterautorefname{Chapter}%
+  \def\sectionautorefname{Section}%
+  \def\subsectionautorefname{Subsection}%
+  \def\subsubsectionautorefname{Subsubsection}%
+  \def\figureautorefname{Figure}%
+}

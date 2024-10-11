@@ -1,0 +1,115 @@
+\addtocontents{toc}{\protect\newpage}
+\chapter{Related Work}
+\label{related}
+
+\epigraph{Comparison is the thief of all joy.}{Theodore Roosevelt, in a letter to W.S. Bigelow, 1898}
+% Roosevelt, in a letter to William Sturgis Bigelow on March 29, 1898: "The phrase, “Comparison is the thief of all joy’ evokes a powerful sentiment that can be life-changing. If we compare ourselves to others, we may be left with feelings of inferiority or superiority—and neither creates an emotionally healthy human being!"
+
+Some of the main contributions of this dissertation, as well as the examples presented in \autoref{examples}, build upon preexisting work in the literature. In this section, we review the precursors and inspirations for these ideas and compare them to our approach.
+
+\section{Comparison with the Predecessors of Reified Descriptions}
+
+In \autoref{reified}, we introduced \reified{}, a Coq inductive data type that can describe and annotate Coq types. This representation is a combination of \glslink{deep embedding}{deep} and \gls{shallow embedding}s. We used \reified{} to describe \constructor{}s (in \autoref{ctorspecs}) and \gls{foreign function}s (in \autoref{primspecs}), and to generate VST specifications.
+
+Ours was not the first combination of \glslink{deep embedding}{deep} and \gls{shallow embedding}s. Others have also attempted to create similar representations and observed that such approaches are easy to interpret into other types. We can categorize these attempts as general approaches and domain-specific approaches.
+
+On the general side, \citeay{mcbride2010outrageous} presents a \glslink{deep embedding}{deep}/\gls{shallow embedding} for a dependent type theory, where they use mutual induction and induction-recursion~\cite{dybjer2000inductionrecursion} to define the syntax and typing judgments for object language, as well as its interpretation to the host language at the same time. This approach allows the user to take advantage of the host language's type equality, instead of defining a semantics for the object language.
+\citeay{prinz2022deeper} present another way of combining \glslink{deep embedding}{deep} and \gls{shallow embedding}s without using induction-recursion. This method indexes the object language definition by the shallow embedding of every term. While this is a less natural way to define an object language, it requires less from the host language, making it easier to achieve syntactic transformations like renaming and substitution. 
+
+In comparison to these general approaches, our approach of \reified{} description with annotations is not as general; it can be considered a special case of \citet{mcbride2010outrageous} or \citet{prinz2022deeper}, except where both the \gls{object language} and the \gls{host language} is Coq. This coincidence enables us to reuse more features of the \gls{host language} than name binding and normalization; we can also annotate the components of a Coq type with Coq type class instances, and we can interpret a Coq type description back to its corresponding Coq type without extra use of \gls{metaprogramming}.
+This allows us to carry values satisfying a type description in a type-safe way, which we use in \autoref{ctordesc} and \autoref{primdesc} to achieve \gls{reflection} of \constructor{}s and \gls{foreign function}s from their descriptions.
+
+On the domain-specific side, \citeay{svenningsson2013combining} present a design pattern in Haskell, where an embedded domain-specific language is presented in a \glslink{deep embedding}{deeply embedded} way, augmented with a type class that allows expressing a correspondence between the \gls{deep embedding} and its \glslink{shallow embedding}{shallowly embedded} counterpart. In the same tradition of research, \citeay{gibbons2014folding} explore the algebraic connection between \glslink{deep embedding}{deep} and \gls{shallow embedding}s of domain-specific languages and how folds are critical for this connection, even though the paper does not present a new technique to combine these embeddings.
+
+While superficially related, our approach in \reified{} descriptions is quite different. \citeauthor{svenningsson2013combining}'s encoding is a solution to the \emph{expression problem}~\cite{wadler1998expression}, while our approach is focuses on making traversals of function types easier.
+
+% \section{Comparison with Theoretical Work on Safe Interoperation}
+
+% There has been theoretical work on the correctness of \FFI{} systems.
+
+% \citeay{trifonov1999safe} ...
+
+% Foreign function interfaces achieve interoperability by having one language mimic the calling conventions of the other language~\cite{matthews2008meaning}.
+
+% For FFI systems where the lower-level language is C, having C types exposed to the higher-level language is common.
+
+
+
+
+
+
+\section{Comparison with Other Work on Safe Interoperation}
+
+VeriFFI provides a roadmap to verify the correctness of \gls
+{foreign function}s and the safety of multilingual interoperation. In this section, we discuss other systems that attempt a similar goal. The section is organized mostly in chronological order, with occasional out-of-order citations for relevant tangents.
+
+\citeay{blume2001} presents an FFI system between Standard ML and C but aims to allow users to write their low-level functions in Standard ML, by providing a method to represent C types in ML. CertiCoq's \FFI{} aims for the opposite; it exposes Coq types into C (not as C types but as \glue{} functions) because we want users to write their \gls{foreign function}s in C so that we can take advantage of VST's separation logic to reason about them. In possible future work, it would be possible to implement a similar approach to \citeauthor{blume2001}'s as a library for VeriFFI, where the C types would be \glslink{reification}{reified} by CompCert's Clightgen and then handled by MetaCoq to generate Coq types.
+
+\citeay{furr2005checking} explore static checks to ensure that foreign functions do not violate type safety in OCaml, and in later work, Java's JNI~\cite{furr2006polymorphic, furr2008checking}. Their work presents a multilingual type system that captures how OCaml values are represented in memory, and uses data-flow analysis to check foreign function calls do not introduce type and memory safety violations. This approach falls short of our needs in two aspects: One aspect is that their approach has problems with polymorphism, yet VeriFFI deals with full dependent types. The other aspect is that VeriFFI can express more than the type safety of the calls; users can verify that a \gls{foreign function} returns the same results as its \gls{functional model}. However, their work involves automatic inference of higher-level language types from \gls{foreign function} implementations in C and therefore is easier than VeriFFI to apply in larger codebases.
+
+
+\citety{CakeML}{kumar2014cakeml} is a compiler for a subset of Standard ML, verified in the HOL4 proof assistant.
+\citeay{Gueneau2017} integrate \emph{Characteristic Formulae}, a separation logic for stateful ML programs, into CakeML. This system supports \gls{foreign function}s as well, but ultimately this system reasons about ML, the higher-level side of the two languages interacting via the \FFI{}.
+Hence, it is possible to write specifications on how the \gls{foreign function} is used in ML, but there is no mechanism to verify that the \gls{foreign function} is implemented correctly.
+In comparison, VeriFFI allows both reasoning about the higher-level side, since it is just Coq code, and the lower-level side, since VST's separation logic and C program logic are available.
+
+
+\citety{Œuf}{mullen2018oeuf} is another verified compiler project from Coq to C. 
+Œuf can compile a subset of \gls{Gallina}, with no user-defined types, dependent types, fixpoints, or pattern matching.
+In comparison, CertiCoq can compile all of \gls{Gallina}.
+Œuf's compiler correctness theorem allows the shim (wrapper code in C that executes the compiled Coq program) to be verified using VST, but it does not have a story about how Coq programs can call C programs,
+or regarding the specified/verified attachment
+of a garbage collector.
+
+\citety{Cogent}{cheung2022} allows one to write functional programs in the HOL logic that type-check in HOL and can be proved correct in HOL, but that \emph{also} type-check in a much more restrictive first-order linear type system---that is, no nested higher-order functions, no sharing of data structures. These first-order linear programs are compiled to C code that (because they are linear) can use \fn{malloc}/\fn{free} and do not require a garbage collector. Although that is a reasonable trade-off to make, it severely restricts the expressiveness of the functional language.
+
+\citeay{turcotte2019reasoning} propose a framework for defining the whole language semantics of \FFI{}s without modeling the semantics of the guest language. This framework allows them to prove the conditional soundness of the host language, stating that any unexpected runtime errors must originate from \gls{foreign function}s. They also provide an implementation of such an FFI system for Lua as the host language and C as the guest language.
+
+\citeay{patterson2022semantic} provide not a system but a recipe (following the theoretical work of \citeay{matthews2007operational} and \citeay{perconti2014verifying}) for sound language interoperability. Their approach involves augmenting their higher-level language with a construct to embed lower-level language terms, and the lower-level language with a construct to embed higher-level language terms. These terms are given a type in the language they are embedded. Their framework stipulates a convertibility relation between the higher-level language types and lower-level language types. While not exactly the same concept, this relation resembles the heap graph predicates we presented in \autoref{predicates}. Our \GraphPredicate{} type class instances are defined over Coq types, and they can relate Coq values of a specific type to their memory representations in C. 
+
+\citety{Melocoton}{gueneau2023melocoton}, perhaps the closest project to VeriFFI in the \FFI{} literature, allows users to write programs in a toy subset of OCaml and a toy subset of C and reason about both sides and their interactions. Users can verify their OCaml code in an OCaml program logic, and their C code in a C program logic, where both program logics are defined on top of Iris, a separation logic framework embedded in Coq.
+Following the conventional way of verifying interoperability through a combination of languages~\cite{matthews2007operational, perconti2014verifying}, Melocoton defines operational semantics and program logics for C, OCaml, and their combination, a ``multi-language semantics''. The user does not have to interact with the combined language and its program logic, but the combined program logic is essential to tie the separate parts together. Melocoton does not include a verified garbage collector, but it has reasoning based on a nondeterministic model of a garbage collector.
+
+In contrast to Melocoton, VeriFFI allows users to write programs in all of \gls{Gallina} and almost all of C. The user can reason about their Coq programs within Coq, which is already a logic and proof assistant and therefore easier to reason in, and their C programs in Coq, via the Verifiable C program logic in the Verified Software Toolchain~\cite{vst-floyd}, a separation logic framework embedded in Coq. 
+
+For VeriFFI we did not have to develop a combined language and a combined program logic for two languages; it has a simpler architecture than Melocoton because of the languages it is based on:
+Coq is both our language of reasoning and the source and implementation language of our compiler. On the other end of the spectrum, C is both the target language of our compiler and the language of our foreign functions. This coincidence means our multilanguage programs can just be ``plugged together," as both the compiler output of our Coq code and our foreign functions are in C. Hence, all of our reasoning about foreign functions can be achieved within the Verifiable C program logic.
+VeriFFI is also based on a verified garbage collector, CertiGC~\cite{wang2019graph}, whose \glslink{CertiCoq heap}{heap} graph representation is essential in how VeriFFI reasons about the representation of Coq values in memory, and whose implementation can be linked to compiled to Coq programs.
+
+% Haskell? % https://alastairreid.github.io/papers/ffi.pdf
+% There is no work on its safety though, so it seems superfluous.
+
+\section{Comparison with Other Compilers Work}
+
+VeriFFI can be used to implement particular data types more efficiently and bring compiler optimizations on a case-by-case basis to CertiCoq compiled code.
+For example, \citeay{baudon2023bit} and \citeay{elsman2024double} present a technique called ``bit-stealing" to represent algebraic data types using less space, and implement a compiler that uses this technique in all data types. 
+While CertiCoq does not use this technique in its representation of Coq values,
+it is possible to implement a foreign type that makes this optimization for a particular type and prove it correct using VeriFFI.
+One useful example would be an integer type with one constructor with a 63-bit integer and another with a big integer.
+Since constructor payloads differ in their \glslink{boxity}{boxities}, we do not need boxed constructors and constructor headers to distinguish between the machine and big integers.
+
+\citeay{chataing2024unboxed} present a more fine-grained method of representing algebraic data types more efficiently, allowing users to mark which constructors to represent in an \gls{unboxed} way. This approach makes interoperation between user-defined types and \gls{foreign type}s easier, and is easier to reason about without knowing the compiler internals. While VeriFFI does not provide this feature, it is (once again) possible to implement the algebraic data types with custom representations presented in the paper as \gls{foreign type}s in VeriFFI.
+
+A similar argument can be made about packed representations of algebraic data types. \citeay{chen2023dargent} present a compiler that allows the user to specify custom memory layouts for algebraic data types, and \citeay{singhal2024optimizing} present another compiler that picks the most optimal representation (i.e.\ with minimal pointer chasing) for data types.
+
+
+\section{Comparison with Other Effect Systems}
+
+In the effectful examples in \autoref{printingbytestrings} and \autoref{mutablearrays}, we discuss the necessity of defining effects as a free monad~\cite{swierstra2008data} in Coq and an interpreter for it in C. This idea derives from the long-standing tradition of representing effects as monads in lazy languages, as proposed by \citeay{peytonjones1993imperative} and later explained in further detail in \citeay{peytonjones2001tackling}. We follow the same tradition and its successors in Coq.
+ % By defining effectful programs as monadic actions, we get to bring order to the execution of effects.
+
+\citety{FreeSpec}{letan2020freespec, letan2021modular} is a Coq framework that allows the modeling and implementation (through extraction) of effectful programs. It has a monadic representation, but it diverges from the Haskell tradition in that different kinds of effects are represented by different ``interfaces,'' which can be composed to write a program that can have various kinds of effects at the same time, providing modularity. \citety{Interaction trees}{xia2019itrees}, another Coq framework for modeling and implementing effectful programs, equipped with an equational reasoning toolkit that FreeSpec lacks, follows the same approach (though they call different effects ``events'').
+
+The way we defined monadic effects in \autoref{examples} is simpler than that. What we lose in modularity, we gain in conciseness and performance. If we were to use interaction trees, our compiled program using a composition of effects would require many levels of pointer indirection for each binary sum of effects it has to unwrap. We want to avoid that, since it affects the performance of the resulting program and also does not provide the most compelling example in a dissertation. \citeay{carstens2022uvrooster}, for example, provides a non-modular but flat collection of effects, which eliminates this indirection.
+
+\newpage
+It is possible to use interaction trees to write effectful programs with CertiCoq and VeriFFI. In fact, this approach meshes well with the VeriFFI infrastructure, as there is already prior work on using interaction trees and VST to verify effectful C programs, such as a web server~\cite{koh2019itrees}.
+
+
+\section{Applications}
+
+The PhD thesis of \citeay{frank2024kernel} uses CertiCoq to compile Linux kernel module component formalizations from Coq to C. His work suggests changes to CertiCoq and VeriFFI, particularly in making the compiler output and generated glue code compatible with kernel space.
+
+\citeay{paykin2024set} uses CertiCoq's \FFI{} in the opposite direction from what this dissertation commonly uses. Instead of running C code within Coq programs, she compiles a verified set data structure backed by red-black trees into C and uses it from C++ code.
+
+As CertiCoq currently does not produce binaries and requires a wrapper program to be written, and writing wrappers that use the Coq program's result inevitably requires the use of generated glue code, we can expect more people to use CertiCoq's FFI system in the near future.

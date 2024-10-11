@@ -1,0 +1,255 @@
+\section{Unsigned Integers}
+\label{integers}
+
+In this section, we will implement 63-bit unsigned integers as a \gls{foreign type} and functions to convert from/to the natural number type, and to add unsigned integers as \gls{foreign function}s. The VST proofs for these functions are written by Stark and Appel, and are covered in the tech report by Korkut, Stark, and Appel~\cite{korkutStarkAppel}.
+
+\subsection{The Coq Interface}
+
+In \autoref{primdesc}, we had defined primitive integers as an example for \reified{} descriptions. Our implementation here will follow that example.
+
+The ideal way to organize a module that uses \gls{foreign type}s and \gls{foreign function}s, is \emph{module type}s. By providing a collection of types and functions on those types, we can define our \gls{foreign type}s as abstract data types~\cite{liskov1974abstract}. Later we can provide different implementations of this abstract data type; the foreign implementation and the \gls{functional model} are just two of such implementations.
+
+The module type for unsigned 63-bit integers can be defined as such:
+\begin{Verbatim}
+\kw{Module Type} \ty{UInt63}.
+  \kw{Parameter} \ty{uint63} : \ty{Type}.
+  \kw{Parameter} \fn{from_nat} : \ty{nat} -> \ty{uint63}.
+  \kw{Parameter} \fn{to_nat} : \ty{uint63} -> \ty{nat}.
+  \kw{Parameter} \fn{add} : \ty{uint63} -> \ty{uint63} -> \ty{uint63}.
+\kw{End} \ty{UInt63}.
+\end{Verbatim}
+
+The foreign implementation in C is computationally opaque from the Coq side. All the \gls{foreign type}s and \gls{foreign function}s are defined as \kw{Axiom}s in Coq:\footnote{Although it might be nicer to define the entire \ty{C} module as a single axiom of module type \ty{UInt63}, we cannot do so because of a limitation in CertiCoq's treatment of (external) primitive values as free variables.}
+
+\begin{Verbatim}
+\kw{Module} \ty{C} : \ty{UInt63}.
+  \kw{Axiom} \ty{uint63} : \ty{Type}.
+  \kw{Axiom} \fn{from_nat} : \ty{nat} -> \ty{uint63}.
+  \kw{Axiom} \fn{to_nat} : \ty{uint63} -> \ty{nat}.
+  \kw{Axiom} \fn{add} : \ty{uint63} -> \ty{uint63} -> \ty{uint63}.
+\kw{End} \ty{C}.
+\end{Verbatim}
+
+The \gls{foreign function}s have to be mapped to their C function names, along with the information of whether the C function to implement a \gls{foreign function} needs to use the \ty{thread\_info}. The system also needs a C header file of the \gls{foreign function}s, which will be \kw{include}d in the compiled code.\newpage
+
+\begin{Verbatim}
+\kw{CertiCoq} \kw{Register}
+  [ \fn{C.from_nat} => \dt{"uint63_from_nat"}
+  , \fn{C.to_nat} => \dt{"uint63_to_nat"} \kw{with tinfo}
+  , \fn{C.add} => \dt{"uint63_add"}
+  ] \kw{Include} [ \dt{"prims.h"} ].
+\end{Verbatim}
+
+If a C function merely inspects Coq values and doesn't need to create any \gls{boxed} Coq values, then \ty{thread\_info} argument is unnecessary. In these examples, \fn{C.from\_nat} inspects and traverses a possibly \gls{boxed} Coq value, but creates an \gls{unboxed} Coq value. \fn{C.to\_nat} inspects an \gls{unboxed} Coq value, and creates a possibly \gls{boxed} Coq value. \fn{C.add} inspects \gls{unboxed} Coq values and creates an \gls{unboxed} Coq value.
+
+\subsection{The C Implementation}
+
+Since the glue functions that discriminate Coq values (such as \fn{get\_\linebreak[0]Coq\_\linebreak[0]Init\_\linebreak[0]Datatypes\_\linebreak[0]nat\_\linebreak[0]tag} return an \ty{int} value, we can define a C \kw{enum} to make the correspondence between a \constructor{} and its \gls{tag} clearer. Here, we use the \constructor{} names and order from the original Coq definition of \ty{nat}s to define such an \kw{enum}:
+
+\begin{Verbatim}
+\kw{typedef} \kw{enum} \{ \dt{O}, \dt{S} \} \ty{nat};
+\end{Verbatim}
+
+We can now define a \gls{foreign function} \fn{uint63\_\linebreak[0]from\_\linebreak[0]nat} that traverses a Coq \ty{nat} value and creates a value of the \gls{foreign type} for unsigned integers. (Recall that a \ty{nat} value is a chain of \gls{boxed} \dt{S} \constructor{}s in memory.)
+
+\begin{Verbatim}
+\ty{value} \fn{uint63_from_nat} (\ty{value} \bn{n}) \{
+  \ty{value} \bn{temp} = \bn{n};
+  \ty{uint64_t} \bn{i} = \dt{0};
+
+  \kw{while} (\fn{get_Coq_Init_Datatypes_nat_tag}(\bn{temp}) \fn{=}\fn{=} \dt{S}) \{
+    \bn{i}\fn{++};
+    \bn{temp} = \fn{get_args}(\bn{temp})[\dt{0}];
+  \}
+  \kw{return} (\ty{value}) ((\bn{i} \fn{<<} \dt{1}) + \dt{1});
+\}
+\end{Verbatim}
+
+The \fn{uint63\_\linebreak[0]from\_\linebreak[0]nat} function keeps a variable (\bn{temp}) for the remaining Coq \ty{nat} value, and another variable (\bn{i}) for the intermediate result. The function keeps trying to increase \bn{i} until there are no more successors (\dt{S}) left in the \ty{nat} value.
+
+The memory representation of unsigned integers will be \gls{unboxed}. In a 64-bit word, we set the last bit to \dt{1} to mark that this value is \gls{unboxed}. We use the remaining 63 bits for the integer itself. This commonly used~\cite{madhavapeddy2022real, brankov2014what} trick eliminates the pointer indirection and memory allocation and header requirements of \gls{boxed} values at the cost of one bit\footnote{If a user needs that one bit, they could also implement 64-bit integers in this system with a \gls{boxed} representation.}. In \gls{foreign function}s dealing with 63-bit integers, we will see a lot of bit shifting to convert back and forth from this representation. 
+
+Implementing \fn{uint63\_\linebreak[0]to\_\linebreak[0]nat} function is less straightforward. For a given integer $n$, we have to allocate memory for \dt{S}, the successor constructor, $n$ times:
+
+\begin{Verbatim}
+\ty{value} \fn{uint63_to_nat} (\kw{struct} \ty{thread_info *}\tinfo{}, \ty{value} \bn{t}) \{
+  \ty{uint64_t} \bn{i} = ((\ty{uint64}) \bn{t}) \fn{>>} ((\ty{uint64_t}) \dt{1});
+  \ty{value} \bn{temp} = \fn{make_Coq_Init_Datatypes_nat_O}();
+  \kw{while} (\bn{i}) \{
+    \kw{if} (\tinfo{}->\bn{limit} \fn{-} \tinfo{}->\bn{alloc} \fn{<} \dt{2}) \{
+      \ty{value} \bn{roots}[\dt{1}] = \{\bn{temp}\};
+      \kw{struct} \ty{stack_frame} \bn{fr} = \{\bn{roots} \fn{+} \dt{1}, \bn{roots}, \tinfo{}->\fn{fp}\};
+      \tinfo{}->\bn{fp} = &\bn{fr};
+      \tinfo{}->\bn{nalloc} = \dt{2}; 
+      \fn{garbage_collect}(\tinfo{});
+      \bn{temp} = \bn{roots}[\dt{0}];
+      \tinfo{}->\bn{fp} = \bn{fr}.\fn{prev};
+    \}
+    \bn{temp} = \fn{alloc_make_Coq_Init_Datatypes_nat_S}(\tinfo{}, \bn{temp});
+    \bn{i}\fn{--};
+  \}
+  \kw{return} \bn{temp};
+\}
+\end{Verbatim}
+
+To convert a 63-bit integer into a Coq \ty{nat}, we have to discard the last bit of the integer and loop over the remaining number. As long as the number is greater than $0$, we keep building new successor values, using the glue function \fn{alloc\_\linebreak[0]make\_\linebreak[0]Coq\_\linebreak[0]Init\_\linebreak[0]Datatypes\_\linebreak[0]nat\_\linebreak[0]S}. However, glue functions that build Coq values \emph{do not} check if there is enough space in the \gls{CertiCoq heap} beforehand; that is assumed as a precondition of these glue functions. Checking if there is enough space and calling the garbage collector if necessary is left to the programmer. This is a deliberate choice that allows the programmer to decide when to do this; the programmer may decide to check at every step for each constructor, or to precalculate how much space will be needed and check if that is available at once.
+
+In this particular function, we choose to check if there is enough space every time we want to allocate an \dt{S} value. We call the garbage collector if there is not enough space left in the \gls{CertiCoq heap}, but we have to make sure \bn{temp}, our temporary Coq \ty{nat} value is not discarded in this process. We achieve that by 
+declaring \bn{temp} a \textit{root} of the
+heap; we push a frame on the stack of frames
+and copy \bn{temp} into that frame. After the collection,
+we copy back the (possibly forwarded) \bn{temp}, pop the stack, and then we can call the glue function to make a Coq \dt{S} value, since we now know that we have enough space in the \gls{CertiCoq heap}.
+
+A curious reader might wonder why we chose to check if there is enough space inside the loop instead of outside the loop. Precalculating the necessary space and checking once for the entire result would seem like a reasonable optimization. However, the garbage collector attempts to guarantee that the nursery (generation $0$ in a generational garbage collector) has at least \code{\tinfo{}->\bn{nalloc}} available slots. If the space we need is larger than the nursery size, garbage collection will fail.\footnote{We could, of course, check the nursery size and set \code{\tinfo{}->\bn{nalloc}} accordingly, as few times as possible. However, that is a more complicated implementation and VST proof.}
+
+\paragraph*{Macros to Help with Memory Checks}
+It can be tedious to write, in every function that allocates constructors, the code that checks if there is enough space, saves intermediate values in a stack frame, and calls the garbage collector. We hide that repetition behind C macros. We introduce \kw{BEGINFRAME}, \kw{GC\_SAVE}$k$, and \kw{ENDFRAME}. \kw{BEGINFRAME} takes $k$, the number of values that will be saved, as an argument. \kw{GC\_SAVE}$k$ takes the number of available slots in the \gls{CertiCoq heap} we need. \kw{ENDFRAME} merely closes delimiters opened by \kw{BEGINFRAME}. We also introduce a macro \kw{LIVEPOINTERS}$k$ that we can wrap around function calls that might possibly include memory checks and garbage collector calls.
+
+With these macros, we can define the \fn{uint63\_to\_nat} function in a simpler way:
+
+\begin{Verbatim}
+\ty{value} \fn{uint63_to_nat}(\kw{struct} \ty{thread_info *}\tinfo{}, \ty{value} \bn{t}) \{
+  \ty{uint64_t} \bn{i} = (\ty{uint64_t}) (((\ty{uint64_t}) \bn{t}) \fn{>>} \dt{1});
+  \ty{value} \bn{save0} = \fn{make_Coq_Init_Datatypes_nat_O}();
+  \kw{BEGINFRAME}(\tinfo{}, \dt{1})
+  \kw{while} (\bn{i}) \{
+    \kw{GC_SAVE1}(\dt{2})
+    \bn{save0} = \fn{alloc_make_Coq_Init_Datatypes_nat_S}(\tinfo{}, \bn{save0});
+    \bn{i}\fn{--};
+  \}
+  \kw{return} \bn{save0};
+  \kw{ENDFRAME}
+\}
+\end{Verbatim}
+
+\newpage
+Finally, we can also implement \fn{uint63\_add}, which adds two 63-bit unsigned integers:
+
+\begin{Verbatim}
+\ty{value} \fn{uint63_add}(\ty{value} \bn{x}, \ty{value} \bn{y}) \{
+  \kw{return} (\ty{value}) ((((((\ty{uint64_t}) \bn{x}) \fn{>>} \dt{1}) \dt{+} (((\ty{uint64_t}) \bn{y}) \fn{>>} \dt{1})) \fn{<<} \dt{1}) \fn{+} \dt{1});
+\}
+\end{Verbatim}
+
+This function first converts the \ty{value}s into 64-bit C integers by discarding the last bit, followed by the addition, after which the result is converted back to the old representation by the last bit being set to \dt{1}.
+
+That concludes the C implementation of 63-bit unsigned integers. Along with the Coq interface, this part suffices for the operational use of VeriFFI. The next subsection is only relevant for users who want to prove properties about their \gls{foreign function}s.
+
+\subsection{The Functional Model}
+
+The Verified Software Toolchain~\cite{appel2023verifiable, appel2023sf} allows the user to prove that a C function implements a \gls{functional model}, that is, a mathematical model of the C function we want to prove correct. Coq is merely the language in which we express mathematics.
+
+VST does not impose any requirements about the type of the \gls{functional model}. As long as the arguments are quantified in the resulting VST function specification, the C type of the C function and the Coq type of the \gls{functional model} do not need to line up exactly. (The VST user provides a \emph{representation relation} characterizing the correspondence.)
+Our recipe for verifying \gls{foreign function}s will be stricter; we wish both the C side and the \gls{functional model} to be compatible with the same \kw{Module Type}, namely \ty{UInt63} in this case.
+
+\ty{FM}, the module that contains the functional model, is simply a module that implements\footnote{We use \code{<:} instead of \code{:} when we ascribe the module type to the module, since we want the definitions in the module to be transparent to the outside. This allows us to write proofs about the \gls{functional model} later.} the same \kw{Module Type} as \ty{C}, the module that contains the axiomatized references to the \gls{foreign function}s. For a meaningful mathematical model of \gls{foreign type}s and \gls{foreign function}s, the \ty{FM} module should consist of concrete definitions in plain Coq:
+
+\begin{Verbatim}
+\kw{Module} \ty{FM} <: \ty{UInt63}.
+  \kw{Definition} \ty{uint63} : \ty{Type} := \{\bn{n} : \ty{nat} | \bn{n} \ty{<} (\dt{2} \fn{^} \dt{63})\}.
+
+  \kw{Lemma} \fn{mod63_ok}: \kw{forall} (\bn{n} : \ty{nat}), (\bn{n} \fn{mod} (\dt{2} \fn{^} \dt{63})) \ty{<} (\dt{2} \fn{^} \dt{63}).
+  \kw{Proof}. \tc{intro}. \tc{apply} \fn{Nat.mod_upper_bound}, \fn{Nat.pow_nonzero}. \tc{auto}. \kw{Qed}.
+  
+  \kw{Definition} \fn{from_nat} (\bn{n} : \ty{nat}) : \ty{uint63} :=
+    (\fn{Nat.modulo} \bn{n} (\dt{2} \fn{^} \dt{63}); \fn{mod63_ok} _).
+
+  \kw{Definition} \fn{to_nat} (\bn{i} : \ty{uint63}) : \ty{nat} :=
+    \kw{let} '(\bn{n}; _) := \bn{i} \kw{in} \bn{n}.
+
+  \kw{Definition} \fn{add} (\bn{x} \bn{y} : \ty{uint63}) : \ty{uint63} :=
+    \kw{let} '(\bn{xn}; \bn{x_pf}) := \bn{x} \kw{in}
+    \kw{let} '(\bn{yn}; \bn{y_pf}) := \bn{y} \kw{in}
+    \kw{let} \bn{n} := (\bn{xn} \fn{+} \bn{yn}) \fn{mod} (\dt{2} \fn{^} \dt{63}) \kw{in}
+    (\bn{n}; \fn{mod63_ok} _).
+\kw{End} \ty{FM}.
+\end{Verbatim}
+
+Machine integers are bounded, therefore we have to model the lower and upper bounds of integers. For unsigned 63-bit integers, the bounds are $[0,2^{63})$. The \ty{nat} type has a lower bound of $0$ by construction, therefore we only have to model the upper bound, which we do using the $\Sigma$-type to express (constructive) existential quantification, as seen above in the definition of \ty{FM.uint63}, the \gls{functional model} of our \gls{foreign type}.
+
+We define the \fn{FM.from\_nat}, using the modulo operation to model integer overflow. Similarly, \fn{FM.to\_nat} unpacks the existential value and returns it. Finally, \fn{FM.add} unpacks both inputs, adds the \ty{nat}s and takes the modulo of the sum.
+
+We use the lemma \fn{mod63\_ok}, which ensures that the modulo of a number with our upper bound is less than our upper bound, to satisfy the propositional part of the existential.
+
+\subsection{Model Proofs for Foreign Functions}
+
+We now have two implementations of unsigned 63-bit integers: The first one lives in the \ty{C} module; it looks like axioms on the Coq side but when compiled to C, it is backed by \gls{foreign function}s in C. The second one lives in the \ty{FM} module; it is a \gls{functional model} that is implemented in plain Coq. The first one is meant to be executed, while the second one is meant to be used in proofs. In \autoref{modelspec}, we set up the mechanisms for us to freely rewrite calls to the functions in \ty{C} to calls to the functions in \ty{FM}. With these rewrites, we can prove theorem statements that involve the functions in \ty{C}.
+
+\begin{Verbatim}
+\kw{Section} \ty{UInt63Proofs}.
+\end{Verbatim}
+
+We can start by opening a new \kw{Section}, which allows us to assume equalities and isomorphisms without having to make them into actual Coq axioms.
+
+\begin{Verbatim}
+\kw{Declare Instance} \fn{Isomorphism_uint63} : \ty{Isomorphism} \ty{FM.uint63} \ty{C.uint63}.
+\end{Verbatim}
+
+We assume there is an isomorphism between the \gls{foreign type} and its \gls{functional model}. (We will later justify this assumption by instantiating \code{\fn{C.uint63} := \fn{FM.uint63}}; here the isomorphism is just to prevent the user from breaking the abstraction.) A foreign value and the mathematical object that models that foreign value are not same entity, but this (constructive) isomorphism makes it is possible to convert between them.
+
+\begin{Verbatim}
+\kw{Instance} \fn{GraphPredicate_uint63} : \GraphPredicate{} \ty{FM.uint63} :=
+  \{| \graphpredicate{} (\bn{g} : \ty{graph}) (\bn{o} : \ty{outlier_t}) (\bn{x} : \ty{FM.uint63}) (\bn{p} : \ty{rep_type}) :=
+       \kw{let} '(\bn{n}; _) := \bn{x} \kw{in}
+       \kw{match} \bn{p} \kw{with}
+       | \dt{repZ} \bn{i} => \bn{i} \ty{=} \fn{Z.of_nat} \bn{n}
+       | _ => \ty{False}
+       \kw{end} |\}.
+
+\kw{Instance} \fn{ForeignInGraph_uint63} : \ForeignInGraph{} \ty{FM.uint63}.
+\kw{Proof}. \cm{...} \kw{Qed}.
+\end{Verbatim}
+
+We define \GraphPredicate{} and \ForeignInGraph{} instances for the \gls{foreign type} and its \gls{functional model}. Notice that the \graphpredicate{} definition takes the \gls{functional model} value as an input, as the \gls{foreign type} in the \ty{C} module is completely opaque, therefore values of that type cannot be inspected in plain Coq.
+This predicate expresses that the integer is represented as an unboxed vertex (\dt{repZ}) in the \gls{CertiCoq heap} graph.
+
+\begin{Verbatim}
+\cm{(* After generating \fn{from_nat_desc}, \fn{to_nat_desc}, and \fn{add_desc}. *)}
+\kw{Variable} \fn{from_nat_spec} : \modelspec{} \fn{from_nat_desc}.
+\kw{Variable} \fn{to_nat_spec} : \modelspec{} \fn{to_nat_desc}.
+\kw{Variable} \fn{add_spec} : \modelspec{} \fn{add_desc}.
+\end{Verbatim}
+
+Now we get to use the mechanisms in \autoref{genspecprim} to generate descriptions of \gls{foreign function}s, and from them, using \modelspec{} mechanism from \autoref{modelspec}, we can generate the equalities we will use to rewrite functions in the \ty{C} module to their counterparts in the \ty{FM} module.
+
+\begin{Verbatim}
+\kw{Theorem} \fn{add_assoc} : \kw{forall} (\bn{x} \bn{y} \bn{z} : \ty{nat}),
+  \fn{C.to_nat} (\fn{C.add} (\fn{C.from_nat} x) (\fn{C.add} (\fn{C.from_nat} \bn{y}) (\fn{C.from_nat} \bn{z}))) =
+  \fn{C.to_nat} (\fn{C.add} (\fn{C.add} (\fn{C.from_nat} \bn{x}) (\fn{C.from_nat} \bn{y})) (\fn{C.from_nat} \bn{z})).
+\kw{Proof}.
+  \tc{intros} \bn{x} \bn{y} \bn{z}.
+  \tc{props} \fn{to_nat_spec}.
+  \tc{props} \fn{add_spec}.
+  \tc{props} \fn{from_nat_spec}.
+  \tc{foreign_rewrites}.
+  \cm{(* The rest is just a proof about the functional model! *)}
+  \tc{unfold} \fn{FM.add}, \fn{FM.from_nat}, \fn{FM.to_nat}.
+  \fn{unfold} \fn{proj1_sig}.
+  \tc{rewrite} <- !(\fn{Nat.Div0.add_mod} \bn{y} \bn{z}).
+  \tc{rewrite} <- !(\fn{Nat.Div0.add_mod} \bn{x} \bn{y}).
+  \tc{rewrite} <- !(\fn{Nat.Div0.add_mod}).
+  \tc{f_equal}.
+  \tc{apply} \fn{Nat.add_assoc}.
+  \kw{all}: \tc{apply} \fn{Nat.pow_nonzero}; \tc{auto}.
+\kw{Qed}.
+
+\kw{End} \ty{UInt63Proofs}.
+\end{Verbatim}
+
+Using these assumptions, we are now able to prove the associativity of 63-bit unsigned machine integers in our system. The first half of our proof consists of rewrites based on the \modelspec{} assumptions. After those rewrites, the proof goal looks like this:
+
+\vspace{.2in}
+
+\begin{SaveVerbatim}{E}
+1 goal
+  
+\bn{x}, \bn{y}, \bn{z} : \ty{nat}
+==============================================================
+\fn{FM.to_nat} (\fn{FM.add} (\fn{FM.from_nat} \bn{x})
+                  (\fn{FM.add} (\fn{FM.from_nat} \bn{y}) (\fn{FM.from_nat} \bn{z}))) \ty{=}
+\fn{FM.to_nat} (\fn{FM.add} (\fn{FM.add} (\fn{FM.from_nat} \bn{x}) (\fn{FM.from_nat} \bn{y}))
+                  (\fn{FM.from_nat} \bn{z}))
+\end{SaveVerbatim}
+\fromcoq{\UseVerbatim{E}}
+
+At this point in the proof, we can proceed as if the proof is only about the \gls{functional model}, as in can be seen in the second half of \fn{add\_assoc}.

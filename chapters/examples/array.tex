@@ -1,0 +1,175 @@
+\section{Mutable Arrays}
+\label{mutablearrays}
+
+Purely functional data structures are easier to reason about than imperative data structures. However, they are inherently inefficient for some use cases~\cite{ponder1988applicative, amram1992pointers, pippenger96pure, okasaki1999purely}, therefore we inevitably need mutable data structures.
+
+Mutable data structures à la OCaml break purity, which is why we only want to allow them in a controlled way. One way to implement them without breaking purity is, of course, to implement them as an effect, similar to how we printed bytestrings in \autoref{printingbytestrings}. However, this may be more restricting than we need. As \citeauthor{launcybury1994lazy}~\cite{launcybury1994lazy} have demonstrated for the \ty{ST} monad in Haskell, it is possible to have local mutation that is externally pure. That is, a client of our function with local mutation cannot tell if our function has mutation in it; its type is pure and it returns the same value for the same inputs.
+
+In this section, we will implement a monad to use mutable arrays as a \gls{foreign type} in Coq, and functions to set, get, and run the monad as \gls{foreign function}s. The VST proofs for these functions will be addressed in future work.
+
+\subsection{The Coq Interface}
+
+Here we will follow a similar approach to how we handled effects in \autoref{printingbytestrings}, but we can now expose \fn{runM} to the Coq side, since we can model the mutation in a purely functional way and it does not break purity.
+
+\begin{Verbatim}
+\kw{Definition} \ty{elt} := \ty{nat}.
+
+\kw{Module Type} \ty{Array}.
+  \kw{Parameter} \ty{M} : \ty{Type} -> \ty{Type}.
+  \kw{Parameter} \fn{pure} : \kw{forall} \{\bn{A} : \ty{Type}\}, \bn{A} -> \ty{M} \bn{A}.
+  \kw{Parameter} \fn{bind} : \kw{forall} \{\bn{A} \bn{B} : \ty{Type}\}, \ty{M} \bn{A} -> (\bn{A} -> \ty{M} \bn{B}) -> \ty{M} \bn{B}.
+  \kw{Parameter} \fn{set} : \ty{nat} -> \ty{elt} -> \ty{M} \ty{unit}.
+  \kw{Parameter} \fn{get} : \ty{nat} -> \ty{M} \ty{elt}.
+  \kw{Parameter} \fn{runM} : \kw{forall} \{\bn{A} : \ty{Type}\} (\bn{len} : \ty{nat}) (\bn{init} : \ty{elt}), \ty{M} \bn{A} -> \bn{A}.
+\kw{End} \ty{Array}.
+\end{Verbatim}
+
+Once again, we have monadic components for returning and binding, as well as ``effectful" operations on arrays, such as getting and setting. The main difference is the \fn{runM} function, which takes the length of the initial array and the initial value at unset indices of the array.
+
+Our approach here is different from that of \citeauthor{launcybury1994lazy} in that we do not apply their rank-2 types trick for the \ty{ST} monad, which restricts references from escaping the monad. Instead, we never expose a reference to a mutable variable (or the entire array) from the interface. The user will have only one array in each instance of the monad \ty{M}.\footnote{Users can have multiple arrays using a monad stack.} While our interface here looks similar to that of \citeauthor{sakaguchi2020program}~\cite{sakaguchi2020program}, our approach here is simpler and less type-safe.\footnote{For \fn{C.set}, we ignore the operation if the index is out of bounds. For \fn{C.get}, we return the default element if the index is out of bounds.} This is a deliberate design choice to make the proof simpler to present.
+
+\begin{Verbatim}
+\kw{Module} \ty{C} <: \ty{Array}.
+  \kw{Inductive} \ty{MI} : \ty{Type} -> \ty{Type} :=
+  | \dt{pureI} : \kw{forall} \{\bn{A} : \ty{Type}\}, \bn{A} -> \ty{MI} \bn{A}
+  | \dt{bindI} : \kw{forall} \{\bn{A} \bn{B} : \ty{Type}\}, \ty{MI} \bn{A} -> (\bn{A} -> \ty{MI} \bn{B}) -> \ty{MI} \bn{B}
+  | \dt{setI} : \ty{nat} -> \ty{elt} -> \ty{MI} \ty{unit}
+  | \dt{getI} : \ty{nat} -> \ty{MI} \ty{elt}.
+
+  \kw{Definition} \ty{M} := \ty{MI}.
+  \kw{Definition} \fn{pure} : \kw{forall} \{\bn{A} : \ty{Type}\}, \bn{A} -> \ty{M} \bn{A} := @\dt{pureI}.
+  \kw{Definition} \fn{bind} : \kw{forall} \{\bn{A} \bn{B} : \ty{Type}\}, \ty{M} \bn{A} -> (\bn{A} -> \ty{M} \bn{B}) -> \ty{M} \bn{B} := @\dt{bindI}.
+  \kw{Definition} \fn{set} : \ty{nat} -> \ty{elt} -> \ty{M} \ty{unit} := @\dt{setI}.
+  \kw{Definition} \fn{get} : \ty{nat} -> \ty{M} \ty{elt} := @\dt{getI}.
+  \kw{Axiom} \fn{runM} : \kw{forall} {\bn{A}} (\bn{len} : \ty{nat}) (\bn{init} : \ty{elt}), \ty{M} \bn{A} -> \bn{A}.
+\kw{End} \ty{C}.
+\end{Verbatim}
+
+Similar to \autoref{printingbytestrings}, we implement operations in the mutable array monad as an abstract syntax tree of actions. We will still have a \fn{runM} function in C to interpret these actions, but this time, we will expose it to the Coq side by declaring it an \kw{Axiom} and telling the compiler that this axiom is realized by a particular C function.
+
+\begin{Verbatim}
+\kw{CertiCoq Register} [ \fn{C.runM} => \dt{"runM"} \kw{with tinfo} ] \kw{Include} [ \dt{"prims.h"} ].
+\end{Verbatim}
+
+\subsection{The C Implementation}
+
+We implement the C side of the mutable array monad interpreter with two functions: \fn{runM} allocates the necessary space on the \gls{CertiCoq heap} and initializes the array with the initial value at each index. \fn{executeM} traverses the monadic action and executes it.
+
+\begin{Verbatim}
+\ty{value} \fn{runM}(\kw{struct} \ty{thread_info *}\tinfo{}, \ty{value} \bn{a}, \ty{value} \bn{len},
+                 \ty{value} \bn{save0}, \ty{value} \bn{save1}) \{
+  \kw{BEGINFRAME}(\tinfo{}, \dt{2})
+  \ty{size_t} \bn{size} = \fn{nat_to_size_t}(\bn{len});
+  \bn{nalloc} = \bn{size} \fn{+} \dt{1}; \kw{GC_SAVE2}
+  \ty{value *}\bn{arr} = \tinfo{}->\bn{alloc};
+  \bn{arr}[\dt{0LLU}] = \bn{size} \fn{<<} \dt{10};
+  \bn{arr} = \bn{arr} \fn{+} \dt{1LLU};
+  \kw{for} (\ty{size_t} \bn{i} = \dt{0}; \bn{i} \fn{<} \bn{size}; \bn{i}\fn{++}) \{
+    \bn{arr}[\bn{i}] = \bn{save0};
+  \}
+  \tinfo{}->\bn{alloc} \fn{+}= \bn{nalloc};
+  \kw{return} \fn{executeM}(\tinfo{}, \bn{size}, \bn{save0}, (\ty{value}) \bn{arr}, \bn{save1});
+  \kw{ENDFRAME}
+\}
+\end{Verbatim}
+
+The function first converts\footnote{The implementation of \fn{nat\_to\_size\_t} is almost the same as \fn{uint63\_from\_nat}, just without the bit shifting to make the last bit \dt{1}.} the array length \bn{len}, which is a Coq \ty{nat}, to a C \ty{size\_t}. This number determines how much space we need to allocate on the \gls{CertiCoq heap}. We treat the array like a Coq constructor with that many arguments, we allocate one word for the header and one word per array index. Of course, while we perform a memory check and possibly call the garbage collector, we have to make sure the initial value for the array (\bn{save0}) and the monadic action (\bn{save1}) are not collected by accident, therefore we save them in a stack frame using the \kw{GC\_SAVE} macro.
+Once we have enough space, we initialize the array with the initial value \bn{save0}, and call \fn{executeM} to execute the monadic action.
+
+\begin{Verbatim}
+\kw{typedef enum} \{ \dt{PURE}, \dt{BIND}, \dt{SET}, \dt{GET} \} \ty{M};
+
+\ty{value} \fn{executeM}(\kw{struct} \ty{thread_info *}\tinfo{}, \ty{size_t} \bn{size}, 
+           \ty{value} \bn{init}, \ty{value} \bn{save0}, \ty{value} \bn{save1}) \{
+  \kw{BEGINFRAME}(\tinfo{}, \dt{2})
+  \kw{switch} (\fn{get_prog_C_MI_tag}(\bn{save1})) \{
+    \cm{// Cases for \dt{PURE} and \dt{BIND} as before}
+    \kw{case} \dt{SET}: \{
+      \ty{value} \bn{arg0} = \fn{get_args}(\bn{save1})[\dt{0}];
+      \ty{size_t} \bn{i} = \fn{nat_to_size_t}(\bn{arg0});
+      \kw{if} (\bn{i} \fn{<} \bn{size}) \{
+        \bn{nalloc} = \dt{1}; \kw{GC_SAVE2}
+        \ty{value} \bn{arg1} = \fn{get_args}(\bn{save1})[\dt{1}];
+        \fn{certicoq_modify}(\tinfo{}, (\ty{value *}) \bn{save0} \fn{+} \bn{i}, \bn{arg1});
+      \}
+      \kw{return} \fn{make_Coq_Init_Datatypes_unit_tt}();
+    \}
+    \kw{case} \dt{GET}: \{
+      \ty{value} \bn{arg0} = \fn{get_args}(\bn{save1})[\dt{0}];
+      \ty{size_t} \bn{i} = \fn{nat_to_size_t}(\bn{arg0});
+      \kw{if} (\bn{i} \fn{<} \bn{size}) \{
+        \kw{return} \fn{get_args}(\bn{save0})[\bn{i}];
+      \} \kw{else} \{
+        \kw{return} \bn{init};
+      \}
+    \}
+  \}
+  \kw{ENDFRAME}
+\}
+\end{Verbatim}
+
+Our \fn{executeM} implementation is similar to the \fn{runM} implementation in \autoref{printingbytestringsc}; it is a free monad interpreter written in C. We omit the \dt{PURE} and \dt{BIND} cases here since they are almost the same as the previous interpreter.
+The \dt{SET} and \dt{GET} cases, however, are interesting.
+
+When we see a \dt{SET} action, we want to find the right slot in the array and assign the new value in that slot. However, we have to notify the garbage collector that we have a mutable reference, because the garbage collector normally operates on the assumption that older values never point on the newer values, which allows it to move values around freely and erase unused values~\cite{fenichel1969lisp}. By creating a mutable reference, we break that assumption, therefore we have to keep a remembered set of old values pointing to new values, so that the garbage collector can update these references when new values are moved~\cite{sansom1993generational}. We achieve that with a call to \fn{certicoq\_modify}\footnote{\fn{certicoq\_modify} was implemented by Tim Carstens and Appel.}, which is a write barrier that saves the mutable reference to the bottom end of the \gls{CertiCoq heap} and therefore keeps a remembered set. 
+
+When we see a \dt{GET} action, we simply access the index in the array if it is within bounds, or return the default value of all indices if the index is out of bounds.
+
+\paragraph*{Reuse in Persistent Arrays} While the design of our array interface and its \gls{foreign function}s is for mutable arrays, it is possible to use the same memory representation of arrays for persistent arrays, which are recently introduced to the Coq standard library~\cite{conchon2007persistent, denes2013towards}.
+
+\subsection{The Functional Model}
+
+The \gls{functional model} for our mutable array monad is similar to our \gls{functional model} for effects in \autoref{printingbytestrings}, except we also provide an implementation for \fn{runM}, which interprets the abstract syntax trees of actions in a purely functional way.
+
+\begin{Verbatim}
+\kw{Module} \ty{FM} <: \ty{Array}.
+  \kw{Definition} \ty{state} : \ty{Type} :=
+    (\ty{list} \ty{elt} \ty{*} \ty{elt}). \cm{(* the internal list and the default element *)}
+  \kw{Definition} \ty{M} (\bn{A} : \ty{Type}) : \ty{Type} := \ty{state} -> \ty{A} \ty{*} \ty{state}.
+  \kw{Definition} \fn{pure} \{\bn{A} : \ty{Type}\} (\bn{a} : \bn{A}) : \ty{M} \bn{A} := \kw{fun} \bn{s} => (\bn{a}, \bn{s}).
+  \kw{Definition} \fn{bind} \{\bn{A} \bn{B} : \ty{Type}\} (\bn{m} : \ty{M} \bn{A}) (\bn{f} : \bn{A} -> \ty{M} \bn{B}) : \ty{M} \bn{B} :=
+    \kw{fun} \bn{s} => \kw{let} '(\bn{a}, \bn{s'}) := \bn{m} \bn{s} \kw{in} \bn{f} \bn{a} \bn{s'}.
+  \kw{Definition} \fn{set} (\bn{index} : \ty{nat}) (\bn{x} : \ty{elt}) : \ty{M} \ty{unit} :=
+    \fn{fun} '(\bn{l}, \bn{init}) => (\dt{tt}, (\fn{replace_nth} \bn{index} \bn{l} \bn{x}, \bn{init})).
+  \kw{Definition} \fn{get} (\bn{index} : \ty{nat}) : \ty{M} \ty{elt} :=
+    \kw{fun} '(\bn{l}, \bn{init}) => (\fn{nth} \bn{index} \bn{l} \bn{init}, (\bn{l}, \bn{init})).
+  \kw{Definition} \fn{runM} \{\bn{A} : \ty{Type}\} (\bn{len} : \ty{nat}) (\bn{init} : \ty{elt}) (\bn{m} : \ty{M} \bn{A}) : \bn{A} :=
+    \fn{fst} (\bn{m} (\fn{repeat} \bn{init} \bn{len}, \bn{init})).
+\kw{End} \ty{FM}.
+\end{Verbatim}
+
+\subsection{Model Proofs for Foreign Functions}
+
+In \autoref{modelproofseffects}, we argued that using Coq's equality type \ty{=} does not make sense for effectful actions, since the output of the execution depends on the outside world. In our mutable array monad, however, the output does not depend on the outside world, and we do not break purity by calling \fn{runM} to execute the monadic action. Therefore, we can call \fn{C.runM} on both sides of the equality, and as long as the array size and default value are the same, we can argue that two different actions have the same result.
+
+In the example below, we prove that first \fn{set}ting an index of an array to a value and then \fn{get}ting the value at that index, gives the same final result (but not the same state). Our proof once again resembles that of \citeauthor{swierstra2007beauty}~\cite{swierstra2007beauty}, since we use the functional semantics in \ty{FM} to reason about mutable state:
+
+\begin{Verbatim}
+\kw{Lemma} \fn{set_get} :
+  \kw{forall} (\bn{n} \bn{len} : \ty{nat}) (\bn{bound} : \bn{n} \ty{<} \bn{len}) (\bn{init} : \ty{elt}) (\bn{to_set} : \ty{elt}),
+    (\fn{C.runM} \bn{len} \bn{init} (\fn{C.bind} (\fn{C.set} \bn{n} \bn{to_set}) (\kw{fun} _ => \fn{C.get} \bn{n})))
+      \ty{=}
+    (\fn{C.runM} \bn{len} \bn{init} (\fn{C.pure} \bn{to_set})).
+\kw{Proof}.
+  \tc{intros} \bn{n} \bn{len} \bn{bound} \bn{init} \bn{to_set}.
+
+  \tc{props} \fn{runM_spec}.
+  \tc{foreign_rewrites}.
+  \tc{unfold} \fn{FM.runM}.
+
+  \tc{props} \fn{bind_spec}.
+  \tc{props} \fn{pure_spec}.
+  \tc{foreign_rewrites}.
+  \tc{unfold} \fn{FM.bind}, \fn{FM.pure}.
+
+  \tc{props} \fn{set_spec}.
+  \tc{props} \fn{get_spec}.
+  \tc{foreign_rewrites}.
+
+  \tc{eapply} \fn{nth_replace_nth}.
+  \tc{rewrite} \fn{repeat_length}.
+  \tc{auto}.
+\kw{Qed}.
+\end{Verbatim}
+
+Similar to \autoref{modelproofseffects}, we have to rewrite and unfold the \ty{C} functions one at a time, since the second argument of \fn{C.bind}, the continuation, hides more uses of functions from \ty{C} inside. Once the \gls{functional model} definition of the continuation is evaluated, we continue rewriting and unfolding as necessary and finally finish the proof by reasoning about the \gls{functional model} definitions \fn{FM.set} and \fn{FM.get}.
